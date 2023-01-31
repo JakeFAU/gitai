@@ -8,4 +8,6 @@ authors = ["Jacob Bourne"]
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }
+dirs-next = "2.0.0"
 git2 = "0.16.1"
+yaml-rust = "0.4.5"
