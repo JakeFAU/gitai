@@ -6,12 +6,7 @@ fn cli() -> Command {
         .subcommand_required(true)
         .arg_required_else_help(true)
         .allow_external_subcommands(true)
-        .subcommand(
-            Command::new("commit")
-                .about("Commits to a repo")
-                .arg(arg!(<LOCATION> "The location of the local repo"))
-                .arg_required_else_help(true),
-        )
+        .subcommand(Command::new("commit").about("Commits to a repo"))
         .subcommand(
             Command::new("pr")
                 .about("Creates a PR")
@@ -25,11 +20,8 @@ fn main() {
     let matches = cli().get_matches();
 
     match matches.subcommand() {
-        Some(("commit", sub_matches)) => {
-            println!(
-                "Committing {}",
-                sub_matches.get_one::<String>("LOCATION").expect("required")
-            );
+        Some(("commit", _sub_matches)) => {
+            println!("Committing",);
         }
         Some(("pr", sub_matches)) => {
             let from_branch = sub_matches
