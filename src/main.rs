@@ -1,11 +1,14 @@
-use std::env;
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::error::Error;
+use std::fs::{self};
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use yaml_rust::{Yaml, YamlLoader};
+
+pub mod ai;
+pub mod git;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -35,6 +38,22 @@ struct Cli {
     #[arg(short, long, value_name = "REPO")]
     local_repo: Option<PathBuf>,
 
+    /// Turn Verbose Mode on
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Turn Stochastic Mode on
+    #[arg(short, long)]
+    stochastic: bool,
+
+    /// Turns Auto Add mode on which adds . to git before making the commit DANGEROUS
+    #[arg(short, long)]
+    auto_add: bool,
+
+    /// Turns Auto AI mode on automatically accepts the AI message without review DANGEROUS
+    #[arg(short = 'i', long = "ai")]
+    auto_ai: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -50,24 +69,34 @@ enum Commands {
         /// The to branch
         to: String,
     },
+    /// Get AI Models
+    Models {},
 }
 
-fn load_yaml_file(file: &str) -> Yaml {
-    let f = Path::new(file);
-    let display = f.display();
-    let mut file = match File::open(&f) {
-        Err(why) => panic!("couldn't open {}: {}", display, why),
-        Ok(file) => file,
-    };
-    let mut contents = String::new();
+/// JSON Structs
+#[derive(Serialize, Deserialize, Debug)]
+struct Settings {
+    pub ai_information: AiInformation,
+    pub git_information: Option<GitInformation>,
+}
+#[derive(Serialize, Deserialize, Debug)]
+struct AiInformation {
+    pub api_url: String,
+    pub api_token: String,
+}
 
-    file.read_to_string(&mut contents)
-        .expect("Unable to read file");
+#[derive(Serialize, Deserialize, Debug)]
+struct GitInformation {
+    pub remote_token: Option<String>,
+    pub remote_url: Option<String>,
+}
 
-    let mut docs = YamlLoader::load_from_str(&contents).unwrap();
-    let doc = docs.swap_remove(0);
-
-    return doc;
+fn load_json_file(path: PathBuf) -> Result<Settings, Box<dyn Error>> {
+    // Open the file in read-only mode with buffer.
+    let settings_file_as_string =
+        fs::read_to_string(path.as_os_str()).expect("Unable to read file");
+    let settings = serde_json::from_str(&settings_file_as_string).expect("JSON not parsing");
+    Ok(settings)
 }
 
 fn main() {
@@ -79,89 +108,71 @@ fn main() {
             let mut path = PathBuf::new();
             path.push(home_dir.as_os_str());
             path.push(".gitai");
-            path.push("settings.yaml");
+            path.push("settings.json");
             path
         }
         Some(c) => c,
     };
 
-    let settings = load_yaml_file(&config_file.into_os_string().into_string().unwrap());
+    let settings = load_json_file(config_file).expect("Problem reading settings.json");
 
-    let git_remote_token: String = match cli.git_remote_token {
-        Some(token) => token,
-        None => match env::var("GIT_TOKEN") {
-            Ok(token) => token,
-            Err(..) => {
-                if settings["GIT_TOKEN"].is_badvalue() {
-                    String::new()
-                } else {
-                    String::from(settings["GIT_TOKEN"].as_str().unwrap())
-                }
-            }
-        },
+    let open_ai_token: String = if let Some(a) = cli.open_ai_token {
+        a
+    } else {
+        settings.ai_information.api_token
     };
 
-    let git_remote_url: String = match cli.git_remote_url {
-        Some(url) => url,
-        None => match env::var("GIT_URL") {
-            Ok(url) => url,
-            Err(..) => {
-                if settings["GIT_URL"].is_badvalue() {
-                    String::new()
-                } else {
-                    String::from(settings["GIT_URL"].as_str().unwrap())
-                }
-            }
-        },
+    let open_ai_url: String = if let Some(a) = cli.open_ai_url {
+        a
+    } else {
+        settings.ai_information.api_url
     };
 
-    let ai_token: String = match cli.open_ai_token {
-        Some(token) => token,
-        None => match env::var("AI_TOKEN") {
-            Ok(token) => token,
-            Err(..) => {
-                if settings["AI_TOKEN"].is_badvalue() {
-                    panic!("The AI_TOKEN must be set somewhere")
-                } else {
-                    String::from(settings["AI_TOKEN"].as_str().unwrap())
-                }
-            }
-        },
+    let git_remote_token: Option<String> = if let Some(g) = cli.git_remote_token {
+        Some(g)
+    } else {
+        if let Some(g) = &settings.git_information {
+            g.remote_token.to_owned()
+        } else {
+            None
+        }
     };
 
-    let ai_url: String = match cli.open_ai_url {
-        Some(url) => url,
-        None => match env::var("AI_URL") {
-            Ok(url) => url,
-            Err(..) => {
-                if settings["AI_URL"].is_badvalue() {
-                    panic!("The AI_URL must be set somewhere")
-                } else {
-                    String::from(settings["AI_URL"].as_str().unwrap())
-                }
-            }
-        },
+    let git_remote_url: Option<String> = if let Some(i) = cli.git_remote_url {
+        Some(i)
+    } else {
+        if let Some(g) = &settings.git_information {
+            g.remote_url.to_owned()
+        } else {
+            None
+        }
     };
 
-    let local_repo: PathBuf = match cli.local_repo {
-        Some(repo) => repo,
-        None => PathBuf::from("."),
+    let git_local_path = if let Some(i) = cli.local_repo {
+        i
+    } else {
+        PathBuf::from(".")
     };
+
+    // Flags
+    let verbose: bool = cli.verbose;
+    let stochastic: bool = cli.stochastic;
+    let auto_add: bool = cli.auto_add;
+    let auto_ai: bool = cli.auto_ai;
 
     match &cli.command {
         Some(Commands::Commit {}) => {
-            println!("commit");
-            println!("{:?}", local_repo);
-            println!("{ai_token}");
-            println!("{ai_url}");
+            let git = git::Git::new_local_only(git_local_path, Some(auto_add), Some(auto_ai));
+            let repo = git.open_repo().unwrap();
+            let origin = repo.find_remote("origin").unwrap();
         }
         Some(Commands::PR { from, to }) => {
             println!("pr {from} -> {to}");
-            println!("{:?}", local_repo);
-            println!("{ai_token}");
-            println!("{ai_url}");
-            println!("{git_remote_token}");
-            println!("{git_remote_url}");
+        }
+        Some(Commands::Models {}) => {
+            let ai = ai::AI::new(&open_ai_url, &open_ai_token);
+            let models = ai.get_models();
+            print!("{:#?}", models);
         }
         None => {}
     }
