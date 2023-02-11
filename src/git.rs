@@ -1,10 +1,10 @@
 use git2::{
-    Commit, Diff, DiffFormat, DiffOptions, Index, IndexAddOption, ObjectType, ReferenceType,
-    Repository,
+    Commit, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
+    ObjectType, Repository,
 };
 use log::debug;
-use std::error::Error;
-use std::{path::PathBuf, str::FromStr};
+
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct GitOptions {
@@ -109,4 +109,46 @@ pub fn get_commit_diff<'a>(repo: &'a Repository, git_options: &'a GitOptions) ->
         .diff_tree_to_index(Some(&old), Some(&index), Some(&mut DiffOptions::default()))
         .expect("Cannot generate DIFF");
     return diff;
+}
+
+pub fn get_diff_text<'a>(diff: &'a Diff, git_options: &'a GitOptions) -> String {
+    let mut diff_content = String::new();
+    let p = diff.print(
+        DiffFormat::Patch,
+        |delta: DiffDelta, hunk: Option<DiffHunk>, line: DiffLine| {
+            let line_num = match line.old_lineno() {
+                Some(num) => num,
+                None => 0,
+            };
+
+            let a_line = std::str::from_utf8(&line.content()).expect("Non UTF8 Characters in Diff");
+
+            if a_line.starts_with("diff --git") || a_line.starts_with("@@") {
+                diff_content.push_str(&format!(
+                    "{}",
+                    std::str::from_utf8(&line.content()).expect("Non UTF8 Characters in Diff")
+                ));
+            } else {
+                match line.origin() {
+                    '-' => diff_content.push_str("-"),
+
+                    '+' => diff_content.push_str("+"),
+
+                    _ => diff_content.push_str(" "),
+                };
+                diff_content.push_str(&format!("{}", line_num));
+                diff_content.push_str(&format!(
+                    " {}",
+                    std::str::from_utf8(&line.content()).expect("Non UTF8 Characters in Diff")
+                ));
+            }
+
+            true
+        },
+    );
+    match p {
+        Ok(..) => debug!("We did it, we printed the diff"),
+        Err(..) => debug!("I guess not"),
+    }
+    return diff_content;
 }

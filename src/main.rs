@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::{env, fs};
 
-use crate::git::{get_commit_diff, get_repository, GitOptions};
+use crate::git::{get_commit_diff, get_diff_text, get_repository, GitOptions};
 
 pub mod ai;
 pub mod git;
@@ -210,10 +210,8 @@ fn main() {
                 GitOptions::new_full(local_repo, &git_token.unwrap(), &git_url.unwrap(), auto_add);
             let repo = get_repository(&git_options);
             let diff = get_commit_diff(&repo, &git_options);
-            let deltas = diff.deltas();
-            for delta in deltas {
-                info!("{:#?}", delta);
-            }
+            let text = get_diff_text(&diff, &git_options);
+            println!("{}", text)
         }
         Some(Commands::PR { from, to }) => {
             print!("From {:#?} To {:#?}", from, to);
