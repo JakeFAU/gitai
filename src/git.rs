@@ -1,99 +1,112 @@
-use git2::{Diff, DiffFormat, DiffOptions, Error, IndexAddOption, Repository};
+use git2::{
+    Commit, Diff, DiffFormat, DiffOptions, Index, IndexAddOption, ObjectType, ReferenceType,
+    Repository,
+};
 use log::debug;
-use serde_json::Value;
-use std::{collections::HashMap, path::PathBuf};
+use std::error::Error;
+use std::{path::PathBuf, str::FromStr};
 
-pub struct Git {
-    local_path: PathBuf,
-    github_token: Option<String>,
-    github_url: Option<String>,
-
-    // flags
-    auto_add: bool,
-    sign_commit: bool,
-    key_id: String,
-    key_signature: String,
-
-    // stuff to set up
-    client: Option<reqwest::blocking::Client>,
+#[derive(Debug)]
+pub struct GitOptions {
+    path: Option<PathBuf>,
+    git_token: Option<String>,
+    git_url: Option<String>,
+    auto_add: Option<bool>,
 }
 
-impl Git {
-    // This is if you want to make PRs
-    pub fn new(
-        local_path: PathBuf,
-        client: reqwest::blocking::Client,
-        github_token: String,
-        github_url: String,
-        auto_add: Option<bool>,
-        sign_commit: Option<bool>,
-        key_id: Option<String>,
-        key_signature: Option<String>,
-    ) -> Self {
-        let git = Git {
-            local_path: local_path,
-            client: Some(client),
-            github_token: Some(github_token),
-            github_url: Some(github_url),
-            auto_add: auto_add.unwrap_or(false),
-            sign_commit: sign_commit.unwrap_or(false),
-            key_id: key_id.unwrap_or_default(),
-            key_signature: key_signature.unwrap_or_default(),
-        };
-        return git;
-    }
-
-    // This is for commit only
-    pub fn new_local_only(
-        local_path: PathBuf,
-        auto_add: Option<bool>,
-        sign_commit: Option<bool>,
-        key_id: Option<String>,
-        key_signature: Option<String>,
-    ) -> Self {
-        let git = Git {
-            local_path: local_path,
-            client: None,
-            github_token: None,
-            github_url: None,
-            auto_add: auto_add.unwrap_or(false),
-            sign_commit: sign_commit.unwrap_or(false),
-            key_id: key_id.unwrap_or_default(),
-            key_signature: key_signature.unwrap_or_default(),
-        };
-        return git;
-    }
-
-    fn _add_files_to_index(self, repo: &Repository) -> Result<(), Error> {
-        debug!("Adding untracked files to index");
-        let mut index = repo.index()?;
-        index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
-        index.write()?;
-        Ok(())
-    }
-
-    pub fn get_diff(self) {
-        debug!("Opening Repo");
-        let repo = git2::Repository::open(&self.local_path).expect("Cannot open repo");
-        // If auto add is set, call the add function
-        debug!("Checking auto-add");
-        debug!("auto_add = {:#?}", &self.auto_add);
-        if self.auto_add {
-            self._add_files_to_index(&repo)
-                .expect("Error Adding New Files To The Index");
+impl Default for GitOptions {
+    fn default() -> Self {
+        GitOptions {
+            path: Some(PathBuf::from(".")),
+            git_token: None,
+            git_url: None,
+            auto_add: Some(false),
         }
-        let head = &repo.head().expect("Cannot get HEAD");
-        let oid = &head.target().unwrap();
-        let commit = &repo.find_commit(*oid).expect("Cannot Find HEAD commit");
-        let old_tree = &commit.tree().expect("Error getting HEAD tree");
-        let index = &repo.index().expect("Error getting Index");
-        let diff = repo
-            .diff_tree_to_index(
-                Some(&old_tree),
-                Some(&index),
-                Some(&mut DiffOptions::default()),
-            )
-            .expect("Unable to get DIFF");
-        diff.print(DiffFormat::Raw, true);
     }
+}
+
+impl GitOptions {
+    pub fn new() -> Self {
+        debug!("Getting default Options");
+        GitOptions::default()
+    }
+
+    pub fn new_with_remote(git_token: &str, git_url: &str) -> Self {
+        debug!("Getting Options with the Remote API Info");
+        let go = GitOptions {
+            git_token: Some(git_token.to_string()),
+            git_url: Some(git_url.to_string()),
+            path: Some(PathBuf::from(".")),
+            auto_add: Some(false),
+        };
+        return go;
+    }
+
+    pub fn new_full(path: PathBuf, git_token: &str, git_url: &str, auto_add: bool) -> Self {
+        debug!("Getting options with everything set");
+        let go = GitOptions {
+            git_token: Some(git_token.to_string()),
+            git_url: Some(git_url.to_string()),
+            path: Some(path),
+            auto_add: Some(auto_add),
+        };
+        return go;
+    }
+}
+pub fn find_last_commit(repo: &Repository) -> Result<Commit, git2::Error> {
+    let obj = repo.head()?.resolve()?.peel(ObjectType::Commit)?;
+    obj.into_commit()
+        .map_err(|_| git2::Error::from_str("Couldn't find commit"))
+}
+
+pub fn display_commit(commit: &Commit) {
+    let timestamp = commit.time().seconds();
+    let tm = time::at(time::Timespec::new(timestamp, 0));
+    println!(
+        "commit {}\nAuthor: {}\nDate:   {}\n\n    {}",
+        commit.id(),
+        commit.author(),
+        tm.rfc822(),
+        commit.message().unwrap_or("no commit message")
+    );
+}
+
+fn _add_all(repo: &Repository) -> Result<(), git2::Error> {
+    let mut index = repo.index()?;
+    index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
+    return index.write();
+}
+
+pub fn get_repository(git_options: &GitOptions) -> Repository {
+    debug!("Getting repository for with options {:#?}", git_options);
+    let path = git_options
+        .path
+        .as_deref()
+        .expect("Cannot Create the Path Object to the repo");
+    let repo = match Repository::open(path) {
+        Ok(repo) => repo,
+        Err(e) => panic!("failed to open: {}", e),
+    };
+    debug!(
+        "Repo Path={:#?} state={:#?}",
+        repo.path().display(),
+        repo.state()
+    );
+    return repo;
+}
+
+pub fn get_commit_diff<'a>(repo: &'a Repository, git_options: &'a GitOptions) -> Diff<'a> {
+    debug!("Getting Diff between index and HEAD");
+    let last_commit = find_last_commit(repo).expect("Cannot get last commit");
+    display_commit(&last_commit);
+    if git_options.auto_add.unwrap_or(false) {
+        debug!("Add flag set, adding all files to index before diff");
+        _add_all(repo).expect("Error Adding Files to Index");
+    }
+    let index = repo.index().expect("Cannot get repo index");
+    let old = last_commit.tree().expect("Unable to get most recent tree");
+    let diff = repo
+        .diff_tree_to_index(Some(&old), Some(&index), Some(&mut DiffOptions::default()))
+        .expect("Cannot generate DIFF");
+    return diff;
 }

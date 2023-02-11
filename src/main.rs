@@ -1,17 +1,13 @@
+use clap::{Parser, Subcommand};
 use dirs_next::home_dir;
-use log::{debug, info, log_enabled, warn};
-use serde::de::Error;
-use serde_json::{from_reader, value, Value};
-
-use std::collections::HashMap;
+use log::{debug, info};
+use serde_json::{from_reader, Value};
 use std::fs::File;
-use std::hash::Hash;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::{env, fs};
 
-use std::path::PathBuf;
-
-use clap::{Parser, Subcommand};
+use crate::git::{get_commit_diff, get_repository, GitOptions};
 
 pub mod ai;
 pub mod git;
@@ -45,19 +41,19 @@ struct Cli {
     local_repo: Option<PathBuf>,
 
     /// Turn Verbose Mode on
-    #[arg(short, long)]
+    #[arg(short, long, action = clap::ArgAction::SetTrue)]
     verbose: Option<bool>,
 
     /// Turn Stochastic Mode on
-    #[arg(short, long)]
+    #[arg(short, long, action = clap::ArgAction::SetTrue)]
     stochastic: Option<bool>,
 
     /// Turns Auto Add mode on which adds . to git before making the commit DANGEROUS
-    #[arg(short, long)]
+    #[arg(short, long, action = clap::ArgAction::SetTrue)]
     auto_add: Option<bool>,
 
     /// Turns Auto AI mode on automatically accepts the AI message without review DANGEROUS
-    #[arg(short = 'i', long = "ai")]
+    #[arg(short = 'i', long, action = clap::ArgAction::SetTrue)]
     auto_ai: Option<bool>,
 
     /// Number of times to try the AI: Note OpenAI Chatbot is not Idenpotent
@@ -65,11 +61,11 @@ struct Cli {
     num_tries: Option<u64>,
 
     /// Sign Commits, if set some variables must be added to settings.json
-    #[arg(short, long)]
-    sign_commit: Option<bool>,
+    #[arg(short, long, action = clap::ArgAction::SetTrue)]
+    gpg_sign_commit: Option<bool>,
 
     /// Signing Key ID: Note, ignored if sign_commit=false
-    #[arg(short, long)]
+    #[arg(long)]
     signature_id: Option<String>,
 
     #[command(subcommand)]
@@ -181,14 +177,14 @@ fn main() {
         .or(settings["ai_information"]["options"]["num_tries"].as_u64())
         .unwrap_or(1);
 
-    let sign_commit = cli
-        .sign_commit
+    let gpg_sign_commit = cli
+        .gpg_sign_commit
         .or(settings["git_information"]["options"]["sign_commit"].as_bool())
         .unwrap_or(false);
 
     let mut key_id = String::new();
     let mut key_signature = String::new();
-    if sign_commit {
+    if gpg_sign_commit {
         let key_id = cli
             .signature_id
             .or(Some(
@@ -210,26 +206,16 @@ fn main() {
     debug!("Matching CLI Command");
     match &cli.command {
         Some(Commands::Commit {}) => {
-            let git = git::Git::new_local_only(
-                local_repo,
-                Some(auto_add),
-                Some(sign_commit),
-                Some(key_id),
-                Some(key_signature),
-            );
+            let git_options =
+                GitOptions::new_full(local_repo, &git_token.unwrap(), &git_url.unwrap(), auto_add);
+            let repo = get_repository(&git_options);
+            let diff = get_commit_diff(&repo, &git_options);
+            let deltas = diff.deltas();
+            for delta in deltas {
+                info!("{:#?}", delta);
+            }
         }
         Some(Commands::PR { from, to }) => {
-            println!("PR From {} to {}", from, to);
-            let git = git::Git::new(
-                local_repo,
-                reqwest::blocking::Client::new(),
-                git_token.unwrap(),
-                git_url.unwrap(),
-                Some(auto_add),
-                Some(sign_commit),
-                Some(key_id),
-                Some(key_signature),
-            );
             print!("From {:#?} To {:#?}", from, to);
         }
         Some(Commands::Models {}) => {
