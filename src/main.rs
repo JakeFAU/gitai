@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::{env, fs};
 
-use crate::ai::OpenAiClient;
+use crate::ai::{OpenAiClient, Prompt};
 use crate::git::{get_commit_diff, get_diff_text, get_repository, GitOptions};
 
 pub mod ai;
@@ -232,10 +232,10 @@ fn main() {
             let diff = get_commit_diff(&repo, &git_options);
             let text = get_diff_text(&diff, &git_options);
             let client = OpenAiClient::new(ai_url, ai_token);
-            let mut prompt = String::from_str("`Imagine you are an expert Rust programmer, summarize the chamges in the following Git Diff:\n\n").unwrap();
-            prompt.push_str(&text);
-            let git_diff_text = prompt.replace("\n", "\n");
-            warn!("Sending to OpenAI {}", git_diff_text);
+            let mut prompt = Prompt::default();
+            prompt.language = Some("Rust".to_string());
+            prompt.git_diff = Some(text);
+            warn!("{}", prompt);
             let res = client
                 .get_completions(prompt, None)
                 .expect("Unable to get completions");
