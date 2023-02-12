@@ -232,12 +232,12 @@ fn main() {
             let diff = get_commit_diff(&repo, &git_options);
             let text = get_diff_text(&diff, &git_options);
             let client = OpenAiClient::new(ai_url, ai_token);
-            let mut prompt = String::from_str("Imagine you are an expert Rust programmer, summarize the following Git Diff file:\n\n").unwrap();
+            let mut prompt = String::from_str("`Imagine you are an expert Rust programmer, summarize the chamges in the following Git Diff:\n\n").unwrap();
             prompt.push_str(&text);
             let git_diff_text = prompt.replace("\n", "\n");
             warn!("Sending to OpenAI {}", git_diff_text);
             let res = client
-                .get_completions(prompt)
+                .get_completions(prompt, None)
                 .expect("Unable to get completions");
             print!("{:#?}", res)
         }
