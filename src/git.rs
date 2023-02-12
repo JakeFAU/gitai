@@ -78,7 +78,7 @@ fn _add_all(repo: &Repository) -> Result<(), git2::Error> {
 }
 
 pub fn get_repository(git_options: &GitOptions) -> Repository {
-    debug!("Getting repository for with options {:#?}", git_options);
+    debug!("Getting repository");
     let path = git_options
         .path
         .as_deref()

@@ -1,12 +1,14 @@
 use clap::{Parser, Subcommand};
 use dirs_next::home_dir;
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde_json::{from_reader, Value};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::{env, fs};
 
+use crate::ai::OpenAiClient;
 use crate::git::{get_commit_diff, get_diff_text, get_repository, GitOptions};
 
 pub mod ai;
@@ -64,6 +66,10 @@ struct Cli {
     #[arg(short, long, action = clap::ArgAction::SetTrue)]
     gpg_sign_commit: Option<bool>,
 
+    /// Programming Language, very useful for small commits/pr
+    #[arg(short, long, value_name = "LANGUAGE")]
+    programming_language: Option<String>,
+
     /// Signing Key ID: Note, ignored if sign_commit=false
     #[arg(long)]
     signature_id: Option<String>,
@@ -83,7 +89,7 @@ enum Commands {
         /// The to branch
         to: String,
     },
-    /// Get AI Models
+    /// Get AI Models - Good for testing connectivity
     Models {},
 }
 
@@ -128,7 +134,6 @@ fn main() {
 
     debug!("Parsing CLI");
     let cli = Cli::parse();
-    debug!("{:#?}", cli);
 
     debug!("Reading settings file");
     let settings = get_settings(cli.config).unwrap();
@@ -137,24 +142,39 @@ fn main() {
     let ai_token = cli
         .open_ai_token
         .or(env::var("AI_OPENAI_TOKEN").ok())
-        .or(Some(settings["ai_information"]["api_token"].to_string()))
+        .or(settings["ai_information"]["api_token"]
+            .as_str()
+            .map(|s| s.to_owned()))
         .expect("AI_TOKEN Must be set");
 
     let ai_url = cli
         .open_ai_url
         .or(env::var("AI_OPENAI_URL").ok())
-        .or(Some(settings["ai_information"]["api_url"].to_string()))
+        .or(settings["ai_information"]["api_url"]
+            .as_str()
+            .map(|s| s.to_owned()))
         .expect("AI_URL Must be set");
 
     let git_token = cli
         .github_token
-        .or(env::var("AI_OPENAI_URL").ok())
-        .or(Some(settings["git_information"]["api_token"].to_string()));
+        .or(env::var("AI_GIT_TOKEN").ok())
+        .or(settings["git_information"]["api_token"]
+            .as_str()
+            .map(|s| s.to_owned()));
 
     let git_url = cli
         .github_url
-        .or(env::var("AI_OPENAI_URL").ok())
-        .or(Some(settings["git_information"]["api_url"].to_string()));
+        .or(env::var("AI_GIT_URL").ok())
+        .or(settings["git_information"]["api_url"]
+            .as_str()
+            .map(|s| s.to_owned()));
+
+    let language = cli
+        .programming_language
+        .or(settings["ai_information"]["options"]["language"]
+            .as_str()
+            .map(|s| s.to_owned()))
+        .unwrap_or_default();
 
     // Flags
     let auto_ai = cli
@@ -211,13 +231,24 @@ fn main() {
             let repo = get_repository(&git_options);
             let diff = get_commit_diff(&repo, &git_options);
             let text = get_diff_text(&diff, &git_options);
-            println!("{}", text)
+            let client = OpenAiClient::new(ai_url, ai_token);
+            let mut prompt = String::from_str("Imagine you are an expert Rust programmer, summarize the following Git Diff file:\n\n").unwrap();
+            prompt.push_str(&text);
+            let git_diff_text = prompt.replace("\n", "\n");
+            warn!("Sending to OpenAI {}", git_diff_text);
+            let res = client
+                .get_completions(prompt)
+                .expect("Unable to get completions");
+            print!("{:#?}", res)
         }
         Some(Commands::PR { from, to }) => {
-            print!("From {:#?} To {:#?}", from, to);
+            info!("Generating PR from {:#?} to {:#?}", from, to);
         }
         Some(Commands::Models {}) => {
-            println!("Get Available Models");
+            info!("Getting Available Models");
+            let client = OpenAiClient::new(ai_url, ai_token);
+            let res = client.get_models().expect("Unable to get models");
+            print!("{:#?}", res)
         }
         None => (),
     }
