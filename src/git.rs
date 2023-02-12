@@ -2,7 +2,7 @@ use git2::{
     Commit, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
     ObjectType, Repository,
 };
-use log::debug;
+use log::{debug, log_enabled, Level};
 
 use std::path::PathBuf;
 
@@ -59,16 +59,17 @@ pub fn find_last_commit(repo: &Repository) -> Result<Commit, git2::Error> {
         .map_err(|_| git2::Error::from_str("Couldn't find commit"))
 }
 
-pub fn display_commit(commit: &Commit) {
+pub fn display_commit(commit: &Commit) -> String {
     let timestamp = commit.time().seconds();
     let tm = time::at(time::Timespec::new(timestamp, 0));
-    println!(
+    let res = format!(
         "commit {}\nAuthor: {}\nDate:   {}\n\n    {}",
         commit.id(),
         commit.author(),
         tm.rfc822(),
         commit.message().unwrap_or("no commit message")
     );
+    return res;
 }
 
 fn _add_all(repo: &Repository) -> Result<(), git2::Error> {
@@ -98,7 +99,9 @@ pub fn get_repository(git_options: &GitOptions) -> Repository {
 pub fn get_commit_diff<'a>(repo: &'a Repository, git_options: &'a GitOptions) -> Diff<'a> {
     debug!("Getting Diff between index and HEAD");
     let last_commit = find_last_commit(repo).expect("Cannot get last commit");
-    display_commit(&last_commit);
+    if log_enabled!(Level::Debug) {
+        debug!("{}", display_commit(&last_commit));
+    }
     if git_options.auto_add.unwrap_or(false) {
         debug!("Add flag set, adding all files to index before diff");
         _add_all(repo).expect("Error Adding Files to Index");

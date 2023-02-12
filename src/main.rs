@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use dirs_next::home_dir;
-use log::{debug, info, warn};
+use log::{debug, info, log_enabled, warn, Level};
 use serde_json::{from_reader, Value};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -235,7 +235,9 @@ fn main() {
             let mut prompt = Prompt::default();
             prompt.language = Some("Rust".to_string());
             prompt.git_diff = Some(text);
-            warn!("{}", prompt);
+            if log_enabled!(Level::Debug) {
+                debug!("{}", prompt.git_diff.as_ref().unwrap());
+            }
             let res = client
                 .get_completions(prompt, None)
                 .expect("Unable to get completions");
