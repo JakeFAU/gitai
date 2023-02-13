@@ -305,7 +305,7 @@ fn main() {
 
             let text = &remove_blank_lines(&open_ai_completion_text);
 
-            println!("Here is your AI Generated Commit Message/n/n{}/n/n", text);
+            println!("Here is your AI Generated Commit Message\n\n{}\n\n", text);
 
             let answer = prompt_yes_no("Would you like to use it?").expect("Error getting input");
             restore_terminal().expect("Unable to switch the terminal back to stout");
@@ -322,8 +322,8 @@ fn main() {
                     .expect("For some reason the commit cannot be found in the repo");
                 info!("{}", display_commit(&_c));
             } else {
-                println!("Sorry, feel free to try again. OpenAi is not idenpotent");
-                println!(
+                info!("Sorry, feel free to try again. OpenAi is not idenpotent");
+                info!(
                     "You wasted {} tokens",
                     res.usage
                         .unwrap()
