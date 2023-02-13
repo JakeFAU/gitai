@@ -166,7 +166,7 @@ pub fn make_commit(
     let git_config = repo.config()?;
     let user_email = match settings["git_information"]["options"]["user_email"].as_str() {
         Some(email) => email.to_string(),
-        None => git_config.get_string("user.name")?.to_string(),
+        None => git_config.get_string("user.email")?.to_string(),
     };
     let user_name = match settings["git_information"]["options"]["user_name"].as_str() {
         Some(email) => email.to_string(),
