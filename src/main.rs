@@ -301,7 +301,7 @@ fn main() {
                 let _c = repo
                     .find_commit(oid)
                     .expect("For some reason the commit cannot be found in the repo");
-                display_commit(&_c);
+                info!("{}", display_commit(&_c));
             } else {
                 println!("Sorry, feel free to try again. OpenAi is not idenpotent");
                 println!(
