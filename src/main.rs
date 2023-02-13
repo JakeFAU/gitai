@@ -7,6 +7,7 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::{env, fs};
 use termion::input::TermRead;
+use termios::{tcsetattr, Termios, TCSAFLUSH};
 
 use crate::ai::{OpenAiClient, Prompt};
 use crate::git::{
@@ -128,6 +129,12 @@ fn get_settings(p: Option<PathBuf>) -> Result<Value, Box<dyn std::error::Error>>
 
 fn _allowed_num_tries(s: &str) -> Result<u8, String> {
     clap_num::number_range(s, 1, 3)
+}
+
+fn restore_terminal() -> io::Result<()> {
+    let mut old_termios = Termios::from_fd(0)?;
+    tcsetattr(0, TCSAFLUSH, &old_termios)?;
+    Ok(())
 }
 
 /// Helper function to ask the user whether or not they really wanted to ____
@@ -301,6 +308,7 @@ fn main() {
             println!("Here is your AI Generated Commit Message/n/n{}/n/n", text);
 
             let answer = prompt_yes_no("Would you like to use it?").expect("Error getting input");
+            restore_terminal().expect("Unable to switch the terminal back to stout");
             debug!("Are we going to use this message? {}", answer);
 
             if answer {
