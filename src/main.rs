@@ -150,6 +150,14 @@ where
     }
 }
 
+fn remove_blank_lines(input: &String) -> String {
+    input
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
 fn main() {
     env_logger::init();
     info!("Initializing GitAI");
@@ -279,21 +287,20 @@ fn main() {
             let open_ai_first_completion = open_ai_choices
                 .first()
                 .expect("OpenAI didn't send back any choices");
-            let open_ai_completion_text = open_ai_first_completion
+            let mut open_ai_completion_text = open_ai_first_completion
                 .text
                 .as_ref()
                 .expect("OpenAI didn't send back any message");
 
-            println!(
-                "Here is your AI Generated Commit Message/n/n{}/n/n",
-                open_ai_completion_text
-            );
+            let text = &remove_blank_lines(&open_ai_completion_text);
+
+            println!("Here is your AI Generated Commit Message/n/n{}/n/n", text);
 
             let answer = prompt_yes_no("Would you like to use it?").expect("Error getting input");
             debug!("Are we going to use this message? {}", answer);
 
             if answer {
-                let oid = match make_commit(&repo, &open_ai_completion_text, &settings) {
+                let oid = match make_commit(&repo, &text, &settings) {
                     Ok(oid) => oid,
                     Err(e) => panic!("{}", e),
                 };
