@@ -1,6 +1,6 @@
 [package]
 name = "gitai"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 authors = ["Jacob Bourne"]
 
@@ -13,9 +13,11 @@ dirs-next = "2.0.0"
 git2 = "0.16.1"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.92"
-reqwest = {version = "0.11.14", features = ["blocking"]}
+reqwest = {version = "0.11.14", features = ["blocking", "json"]}
 chrono = "0.4.23"
 log = "0.4.17"
 env_logger = "0.10.0"
 url = "2.3.1"
 time = "0.1.40"
+termion = "2.0.1"
+termios = "0.3.3"

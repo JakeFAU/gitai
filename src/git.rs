@@ -1,8 +1,8 @@
 use git2::{
     Commit, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
-    ObjectType, Repository,
+    ObjectType, Oid, Repository, Signature,
 };
-use log::debug;
+use log::{debug, log_enabled, Level};
 
 use std::path::PathBuf;
 
@@ -42,13 +42,13 @@ impl GitOptions {
         return go;
     }
 
-    pub fn new_full(path: PathBuf, git_token: &str, git_url: &str, auto_add: bool) -> Self {
+    pub fn new_full(path: &PathBuf, git_token: &str, git_url: &str, auto_add: &bool) -> Self {
         debug!("Getting options with everything set");
         let go = GitOptions {
             git_token: Some(git_token.to_string()),
             git_url: Some(git_url.to_string()),
-            path: Some(path),
-            auto_add: Some(auto_add),
+            path: Some(path.to_path_buf()),
+            auto_add: Some(*auto_add),
         };
         return go;
     }
@@ -59,16 +59,17 @@ pub fn find_last_commit(repo: &Repository) -> Result<Commit, git2::Error> {
         .map_err(|_| git2::Error::from_str("Couldn't find commit"))
 }
 
-pub fn display_commit(commit: &Commit) {
+pub fn display_commit(commit: &Commit) -> String {
     let timestamp = commit.time().seconds();
     let tm = time::at(time::Timespec::new(timestamp, 0));
-    println!(
+    let res = format!(
         "commit {}\nAuthor: {}\nDate:   {}\n\n    {}",
         commit.id(),
         commit.author(),
         tm.rfc822(),
         commit.message().unwrap_or("no commit message")
     );
+    return res;
 }
 
 fn _add_all(repo: &Repository) -> Result<(), git2::Error> {
@@ -78,7 +79,7 @@ fn _add_all(repo: &Repository) -> Result<(), git2::Error> {
 }
 
 pub fn get_repository(git_options: &GitOptions) -> Repository {
-    debug!("Getting repository for with options {:#?}", git_options);
+    debug!("Getting repository");
     let path = git_options
         .path
         .as_deref()
@@ -98,7 +99,9 @@ pub fn get_repository(git_options: &GitOptions) -> Repository {
 pub fn get_commit_diff<'a>(repo: &'a Repository, git_options: &'a GitOptions) -> Diff<'a> {
     debug!("Getting Diff between index and HEAD");
     let last_commit = find_last_commit(repo).expect("Cannot get last commit");
-    display_commit(&last_commit);
+    if log_enabled!(Level::Debug) {
+        debug!("{}", display_commit(&last_commit));
+    }
     if git_options.auto_add.unwrap_or(false) {
         debug!("Add flag set, adding all files to index before diff");
         _add_all(repo).expect("Error Adding Files to Index");
@@ -151,4 +154,42 @@ pub fn get_diff_text<'a>(diff: &'a Diff, git_options: &'a GitOptions) -> String 
         Err(..) => debug!("I guess not"),
     }
     return diff_content;
+}
+
+pub fn make_commit(
+    repo: &Repository,
+    message: &str,
+    settings: &serde_json::Value,
+) -> Result<Oid, git2::Error> {
+    debug!("Committing files to repo");
+
+    let git_config = repo.config()?;
+    let user_email = match settings["git_information"]["options"]["user_email"].as_str() {
+        Some(email) => email.to_string(),
+        None => git_config.get_string("user.email")?.to_string(),
+    };
+    let user_name = match settings["git_information"]["options"]["user_name"].as_str() {
+        Some(email) => email.to_string(),
+        None => git_config.get_string("user.name")?.to_string(),
+    };
+    debug!(
+        "Using the following values for the commit {} {}",
+        user_name, user_email
+    );
+    let sig = Signature::now(&user_name, &user_email).expect("Error Generating Signature");
+
+    debug!("Preparing actual commit");
+    let last_commit = find_last_commit(repo).expect("Cannot get last commit");
+    let tree_id = repo.index()?.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    let commit_id = repo.commit(
+        Some("HEAD"),    //  point HEAD to our new commit
+        &sig,            // author
+        &sig,            // committer
+        message,         // commit message
+        &tree,           // tree
+        &[&last_commit], // parents
+    )?;
+    debug!("Commit worked id = {}", commit_id.to_string());
+    return Ok(commit_id);
 }

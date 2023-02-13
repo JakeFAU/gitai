@@ -1,13 +1,18 @@
 use clap::{Parser, Subcommand};
 use dirs_next::home_dir;
-use log::{debug, info};
+use log::{debug, error, info, log_enabled, Level};
 use serde_json::{from_reader, Value};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::{env, fs};
+use termion::input::TermRead;
+use termios::{tcsetattr, Termios, TCSAFLUSH};
 
-use crate::git::{get_commit_diff, get_diff_text, get_repository, GitOptions};
+use crate::ai::{OpenAiClient, Prompt};
+use crate::git::{
+    display_commit, get_commit_diff, get_diff_text, get_repository, make_commit, GitOptions,
+};
 
 pub mod ai;
 pub mod git;
@@ -64,6 +69,10 @@ struct Cli {
     #[arg(short, long, action = clap::ArgAction::SetTrue)]
     gpg_sign_commit: Option<bool>,
 
+    /// Programming Language, very useful for small commits/pr
+    #[arg(short, long, value_name = "LANGUAGE")]
+    programming_language: Option<String>,
+
     /// Signing Key ID: Note, ignored if sign_commit=false
     #[arg(long)]
     signature_id: Option<String>,
@@ -83,7 +92,7 @@ enum Commands {
         /// The to branch
         to: String,
     },
-    /// Get AI Models
+    /// Get AI Models - Good for testing connectivity
     Models {},
 }
 
@@ -122,13 +131,50 @@ fn _allowed_num_tries(s: &str) -> Result<u8, String> {
     clap_num::number_range(s, 1, 3)
 }
 
+fn restore_terminal() -> io::Result<()> {
+    let mut old_termios = Termios::from_fd(0)?;
+    tcsetattr(0, TCSAFLUSH, &old_termios)?;
+    Ok(())
+}
+
+/// Helper function to ask the user whether or not they really wanted to ____
+/// (as specified by the `prompt`). As long as the response starts with the
+/// letter `y` (case insensitive), the reply is treated as affirmative.
+pub fn prompt_yes_no<S>(prompt: S) -> io::Result<bool>
+where
+    S: AsRef<str>,
+{
+    let prompt = prompt.as_ref();
+
+    let stdin = io::stdin();
+    let mut stdin = stdin.lock();
+
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+
+    write!(stdout, "{} [y/N] ", prompt)?;
+    stdout.flush()?;
+
+    match TermRead::read_line(&mut stdin)? {
+        Some(ref reply) if reply.to_ascii_lowercase().starts_with('y') => Ok(true),
+        _ => Ok(false),
+    }
+}
+
+fn remove_blank_lines(input: &String) -> String {
+    input
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
 fn main() {
     env_logger::init();
     info!("Initializing GitAI");
 
     debug!("Parsing CLI");
     let cli = Cli::parse();
-    debug!("{:#?}", cli);
 
     debug!("Reading settings file");
     let settings = get_settings(cli.config).unwrap();
@@ -137,24 +183,39 @@ fn main() {
     let ai_token = cli
         .open_ai_token
         .or(env::var("AI_OPENAI_TOKEN").ok())
-        .or(Some(settings["ai_information"]["api_token"].to_string()))
+        .or(settings["ai_information"]["api_token"]
+            .as_str()
+            .map(|s| s.to_owned()))
         .expect("AI_TOKEN Must be set");
 
     let ai_url = cli
         .open_ai_url
         .or(env::var("AI_OPENAI_URL").ok())
-        .or(Some(settings["ai_information"]["api_url"].to_string()))
+        .or(settings["ai_information"]["api_url"]
+            .as_str()
+            .map(|s| s.to_owned()))
         .expect("AI_URL Must be set");
 
     let git_token = cli
         .github_token
-        .or(env::var("AI_OPENAI_URL").ok())
-        .or(Some(settings["git_information"]["api_token"].to_string()));
+        .or(env::var("AI_GIT_TOKEN").ok())
+        .or(settings["git_information"]["api_token"]
+            .as_str()
+            .map(|s| s.to_owned()));
 
     let git_url = cli
         .github_url
-        .or(env::var("AI_OPENAI_URL").ok())
-        .or(Some(settings["git_information"]["api_url"].to_string()));
+        .or(env::var("AI_GIT_URL").ok())
+        .or(settings["git_information"]["api_url"]
+            .as_str()
+            .map(|s| s.to_owned()));
+
+    let language = cli
+        .programming_language
+        .or(settings["ai_information"]["options"]["language"]
+            .as_str()
+            .map(|s| s.to_owned()))
+        .unwrap_or_default();
 
     // Flags
     let auto_ai = cli
@@ -206,18 +267,79 @@ fn main() {
     debug!("Matching CLI Command");
     match &cli.command {
         Some(Commands::Commit {}) => {
-            let git_options =
-                GitOptions::new_full(local_repo, &git_token.unwrap(), &git_url.unwrap(), auto_add);
+            let git_options = GitOptions::new_full(
+                &local_repo,
+                &git_token.unwrap(),
+                &git_url.unwrap(),
+                &auto_add,
+            );
+            debug!("Getting Repository at {:#?}", &local_repo);
             let repo = get_repository(&git_options);
+
+            debug!("Getting Diff for {:#?}", &local_repo);
             let diff = get_commit_diff(&repo, &git_options);
-            let text = get_diff_text(&diff, &git_options);
-            println!("{}", text)
+
+            debug!("Got Diff, Its OpenA Time");
+            let git_diff_text = get_diff_text(&diff, &git_options);
+            let client = OpenAiClient::new(ai_url, ai_token);
+
+            debug!("We have a client, lets build the prompt");
+            let mut prompt = Prompt::default();
+            prompt.language = Some(language);
+            prompt.git_diff = Some(git_diff_text);
+            if log_enabled!(Level::Debug) {
+                debug!("{}", prompt.git_diff.as_ref().unwrap());
+            }
+            let res = client
+                .get_completions(prompt, None)
+                .expect("Unable to get completions");
+
+            let open_ai_choices = &res.choices.expect("OpenAI didn't send back any choices");
+            let open_ai_first_completion = open_ai_choices
+                .first()
+                .expect("OpenAI didn't send back any choices");
+            let mut open_ai_completion_text = open_ai_first_completion
+                .text
+                .as_ref()
+                .expect("OpenAI didn't send back any message");
+
+            let text = &remove_blank_lines(&open_ai_completion_text);
+
+            println!("Here is your AI Generated Commit Message\n\n{}\n\n", text);
+
+            let answer = prompt_yes_no("Would you like to use it?").expect("Error getting input");
+            restore_terminal().expect("Unable to switch the terminal back to stout");
+            debug!("Are we going to use this message? {}", answer);
+
+            if answer {
+                let oid = match make_commit(&repo, &text, &settings) {
+                    Ok(oid) => oid,
+                    Err(e) => panic!("{}", e),
+                };
+                debug!("Commit worked, returned {}", oid.to_string());
+                let _c = repo
+                    .find_commit(oid)
+                    .expect("For some reason the commit cannot be found in the repo");
+                info!("{}", display_commit(&_c));
+            } else {
+                info!("Sorry, feel free to try again. OpenAi is not idenpotent");
+                info!(
+                    "You wasted {} tokens",
+                    res.usage
+                        .unwrap()
+                        .total_tokens
+                        .expect("OpenAI Didn't event send back how many tokens you used.")
+                );
+            }
         }
         Some(Commands::PR { from, to }) => {
-            print!("From {:#?} To {:#?}", from, to);
+            info!("Generating PR from {:#?} to {:#?}", from, to);
         }
         Some(Commands::Models {}) => {
-            println!("Get Available Models");
+            info!("Getting Available Models");
+            let client = OpenAiClient::new(ai_url, ai_token);
+            let res = client.get_models().expect("Unable to get models");
+            print!("{:#?}", res)
         }
         None => (),
     }
