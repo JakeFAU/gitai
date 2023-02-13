@@ -39,9 +39,9 @@ impl Default for Prompt {
             language: Some("Python  ".to_string()),
             postamble: Some("developer and were given a git diff file to look at:".to_string()),
             git_diff: Some(DEFAULT_CODE.to_string()),
-            seperator: Some('='),
+            seperator: Some('-'),
             postmessage: Some(
-                "Please write a paragraph summarizing the changes you made.".to_string(),
+                "Please generate a good explanation of what the developer did. Stop when you think its clear enough to move on.".to_string(),
             ),
         }
     }
@@ -56,11 +56,11 @@ impl Display for Prompt {
             self.preamble.as_ref().unwrap_or(&"".to_string()),
             self.language.as_ref().unwrap_or(&"".to_string()),
             self.postamble.as_ref().unwrap_or(&"".to_string()),
-            repeat(self.seperator.unwrap_or('='))
+            repeat(self.seperator.unwrap_or('-'))
                 .take(16)
                 .collect::<String>(),
             self.git_diff.as_ref().unwrap_or(&"".to_string()),
-            repeat(self.seperator.unwrap_or('='))
+            repeat(self.seperator.unwrap_or('-'))
                 .take(16)
                 .collect::<String>(),
             self.postmessage.as_ref().unwrap_or(&"".to_string()),
@@ -103,40 +103,40 @@ pub struct OpenAiRequestParams {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct OpenAiChoice {
     /// The response
-    text: Option<String>,
+    pub text: Option<String>,
     /// The index number of this choice
-    index: Option<u8>,
+    pub index: Option<u8>,
     /// logprobs (if set to return)
-    logprobs: Option<f32>,
+    pub logprobs: Option<f32>,
     /// why the completion stopped
-    finish_reason: Option<String>,
+    pub finish_reason: Option<String>,
 }
 
 /// Shows you how many tokens you used on this request.  This affects your bill
 #[derive(Serialize, Deserialize, Debug)]
 pub struct OpenAiUsage {
     /// The number of tokens in the prompt
-    prompt_tokens: Option<u16>,
+    pub prompt_tokens: Option<u16>,
     /// The number of tokens in the completion
-    completion_tokens: Option<u16>,
+    pub completion_tokens: Option<u16>,
     /// The total number of tokens.  This is what you are billed for
-    total_tokens: Option<u16>,
+    pub total_tokens: Option<u16>,
 }
 /// The response that comes back from OpenAI for a completion
 #[derive(Serialize, Deserialize, Debug)]
 pub struct OpenAiCompletionResponse {
     /// An Id
-    id: Option<String>,
+    pub id: Option<String>,
     /// what OpenAi did (should be 'text_completion' for this)
-    object: Option<String>,
+    pub object: Option<String>,
     /// A timestamp of when this was created
-    created: Option<u64>,
+    pub created: Option<u64>,
     /// which model to use, right now code-davinici-002 is the best
-    model: Option<String>,
+    pub model: Option<String>,
     /// The choices it returned, this will be a Vec whose length is equal to n for the request
-    choices: Option<Vec<OpenAiChoice>>,
+    pub choices: Option<Vec<OpenAiChoice>>,
     /// The usage this request used
-    usage: Option<OpenAiUsage>,
+    pub usage: Option<OpenAiUsage>,
 }
 
 /// Default Implementation - Sets all things **except** the prompt to what you probably want to use

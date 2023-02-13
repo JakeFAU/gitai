@@ -1,6 +1,6 @@
 use git2::{
     Commit, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
-    ObjectType, Repository,
+    ObjectType, Oid, Repository, Signature,
 };
 use log::{debug, log_enabled, Level};
 
@@ -42,13 +42,13 @@ impl GitOptions {
         return go;
     }
 
-    pub fn new_full(path: PathBuf, git_token: &str, git_url: &str, auto_add: bool) -> Self {
+    pub fn new_full(path: &PathBuf, git_token: &str, git_url: &str, auto_add: &bool) -> Self {
         debug!("Getting options with everything set");
         let go = GitOptions {
             git_token: Some(git_token.to_string()),
             git_url: Some(git_url.to_string()),
-            path: Some(path),
-            auto_add: Some(auto_add),
+            path: Some(path.to_path_buf()),
+            auto_add: Some(*auto_add),
         };
         return go;
     }
@@ -154,4 +154,42 @@ pub fn get_diff_text<'a>(diff: &'a Diff, git_options: &'a GitOptions) -> String 
         Err(..) => debug!("I guess not"),
     }
     return diff_content;
+}
+
+pub fn make_commit(
+    repo: &Repository,
+    message: &str,
+    settings: &serde_json::Value,
+) -> Result<Oid, git2::Error> {
+    debug!("Committing files to repo");
+
+    let git_config = repo.config()?;
+    let user_email = match settings["git_information"]["options"]["user_email"].as_str() {
+        Some(email) => email.to_string(),
+        None => git_config.get_string("user.name")?.to_string(),
+    };
+    let user_name = match settings["git_information"]["options"]["user_name"].as_str() {
+        Some(email) => email.to_string(),
+        None => git_config.get_string("user.name")?.to_string(),
+    };
+    debug!(
+        "Using the following values for the commit {} {}",
+        user_name, user_email
+    );
+    let sig = Signature::now(&user_name, &user_email).expect("Error Generating Signature");
+
+    debug!("Preparing actual commit");
+    let last_commit = find_last_commit(repo).expect("Cannot get last commit");
+    let tree_id = repo.index()?.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    let commit_id = repo.commit(
+        Some("HEAD"),    //  point HEAD to our new commit
+        &sig,            // author
+        &sig,            // committer
+        message,         // commit message
+        &tree,           // tree
+        &[&last_commit], // parents
+    )?;
+    debug!("Commit worked id = {}", commit_id.to_string());
+    return Ok(commit_id);
 }

@@ -1,15 +1,17 @@
 use clap::{Parser, Subcommand};
 use dirs_next::home_dir;
-use log::{debug, info, log_enabled, warn, Level};
+use log::{debug, error, info, log_enabled, Level};
 use serde_json::{from_reader, Value};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::{env, fs};
+use termion::input::TermRead;
 
 use crate::ai::{OpenAiClient, Prompt};
-use crate::git::{get_commit_diff, get_diff_text, get_repository, GitOptions};
+use crate::git::{
+    display_commit, get_commit_diff, get_diff_text, get_repository, make_commit, GitOptions,
+};
 
 pub mod ai;
 pub mod git;
@@ -128,6 +130,26 @@ fn _allowed_num_tries(s: &str) -> Result<u8, String> {
     clap_num::number_range(s, 1, 3)
 }
 
+/// Helper function to ask the user whether or not they really wanted to ____
+/// (as specified by the `prompt`). As long as the response starts with the
+/// letter `y` (case insensitive), the reply is treated as affirmative.
+pub fn prompt_yes_no<S>(prompt: S) -> io::Result<bool>
+where
+    S: AsRef<str>,
+{
+    let prompt = prompt.as_ref();
+    let stdin = io::stdin();
+    let mut stdin = stdin.lock();
+
+    write!(io::stdout(), "{} [y/N] ", prompt)?;
+    io::stdout().flush()?;
+
+    match TermRead::read_line(&mut stdin)? {
+        Some(ref reply) if reply.to_ascii_lowercase().starts_with('y') => Ok(true),
+        _ => Ok(false),
+    }
+}
+
 fn main() {
     env_logger::init();
     info!("Initializing GitAI");
@@ -226,22 +248,70 @@ fn main() {
     debug!("Matching CLI Command");
     match &cli.command {
         Some(Commands::Commit {}) => {
-            let git_options =
-                GitOptions::new_full(local_repo, &git_token.unwrap(), &git_url.unwrap(), auto_add);
+            let git_options = GitOptions::new_full(
+                &local_repo,
+                &git_token.unwrap(),
+                &git_url.unwrap(),
+                &auto_add,
+            );
+            debug!("Getting Repository at {:#?}", &local_repo);
             let repo = get_repository(&git_options);
+
+            debug!("Getting Diff for {:#?}", &local_repo);
             let diff = get_commit_diff(&repo, &git_options);
-            let text = get_diff_text(&diff, &git_options);
+
+            debug!("Got Diff, Its OpenA Time");
+            let git_diff_text = get_diff_text(&diff, &git_options);
             let client = OpenAiClient::new(ai_url, ai_token);
+
+            debug!("We have a client, lets build the prompt");
             let mut prompt = Prompt::default();
-            prompt.language = Some("Rust".to_string());
-            prompt.git_diff = Some(text);
+            prompt.language = Some(language);
+            prompt.git_diff = Some(git_diff_text);
             if log_enabled!(Level::Debug) {
                 debug!("{}", prompt.git_diff.as_ref().unwrap());
             }
             let res = client
                 .get_completions(prompt, None)
                 .expect("Unable to get completions");
-            print!("{:#?}", res)
+
+            let open_ai_choices = &res.choices.expect("OpenAI didn't send back any choices");
+            let open_ai_first_completion = open_ai_choices
+                .first()
+                .expect("OpenAI didn't send back any choices");
+            let open_ai_completion_text = open_ai_first_completion
+                .text
+                .as_ref()
+                .expect("OpenAI didn't send back any message");
+
+            println!(
+                "Here is your AI Generated Commit Message/n/n{}/n/n",
+                open_ai_completion_text
+            );
+
+            let answer = prompt_yes_no("Would you like to use it?").expect("Error getting input");
+            debug!("Are we going to use this message? {}", answer);
+
+            if answer {
+                let oid = match make_commit(&repo, &open_ai_completion_text, &settings) {
+                    Ok(oid) => oid,
+                    Err(e) => panic!("{}", e),
+                };
+                debug!("Commit worked, returned {}", oid.to_string());
+                let _c = repo
+                    .find_commit(oid)
+                    .expect("For some reason the commit cannot be found in the repo");
+                display_commit(&_c);
+            } else {
+                println!("Sorry, feel free to try again. OpenAi is not idenpotent");
+                println!(
+                    "You wasted {} tokens",
+                    res.usage
+                        .unwrap()
+                        .total_tokens
+                        .expect("OpenAI Didn't event send back how many tokens you used.")
+                );
+            }
         }
         Some(Commands::PR { from, to }) => {
             info!("Generating PR from {:#?} to {:#?}", from, to);
