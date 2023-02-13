@@ -138,11 +138,15 @@ where
     S: AsRef<str>,
 {
     let prompt = prompt.as_ref();
+
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
 
-    write!(io::stdout(), "{} [y/N] ", prompt)?;
-    io::stdout().flush()?;
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+
+    write!(stdout, "{} [y/N] ", prompt)?;
+    stdout.flush()?;
 
     match TermRead::read_line(&mut stdin)? {
         Some(ref reply) if reply.to_ascii_lowercase().starts_with('y') => Ok(true),
