@@ -22,15 +22,15 @@ pub mod git;
 #[command(propagate_version = true)]
 struct Cli {
     /// set GitHub API token
-    #[arg(long = "git_api_token", value_name = "API_TOKEN")]
+    #[arg(long = "git_api_token", value_name = "GITHUB_TOKEN")]
     github_token: Option<String>,
 
     /// set GitHub API url
-    #[arg(long = "git_api_url", value_name = "AI_URL", value_hint = clap::ValueHint::Url)]
+    #[arg(long = "git_api_url", value_name = "GITHUB_URL", value_hint = clap::ValueHint::Url)]
     github_url: Option<String>,
 
     /// set OpenAI token
-    #[arg(long = "ai_api_token", value_name = "API_TOKEN")]
+    #[arg(long = "ai_api_token", value_name = "AI_TOKEN")]
     open_ai_token: Option<String>,
 
     /// set OpenAI url

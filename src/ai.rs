@@ -149,14 +149,14 @@ impl Default for OpenAiRequestParams {
                 .expect("Why cant I set the default?"),
             suffix: None,
             max_tokens: Some(256),
-            temperature: Some(0.0),
+            temperature: Some(0.05),
             top_p: Some(1.0),
             n: Some(1),
             logprobs: None,
             echo: Some(false),
             stop: None,
-            presence_penalty: Some(0.0),
-            frequency_penalty: Some(0.0),
+            presence_penalty: Some(0.2),
+            frequency_penalty: Some(0.2),
             best_of: Some(1),
         }
     }
@@ -249,9 +249,10 @@ impl OpenAiClient {
         let mut request_params = open_ai_request_params.unwrap_or_default();
         request_params.prompt = format!("{}", prompt);
         request_params.max_tokens = Some(min(
-            <usize as TryInto<u16>>::try_into(request_params.prompt.chars().count()).unwrap() / 3,
+            <usize as TryInto<u16>>::try_into(request_params.prompt.chars().count()).unwrap() / 10,
             256,
         ));
+        debug!("Max Tokens Set To {}", &request_params.max_tokens.unwrap());
         let res = self.client.post(url).json(&request_params).send()?;
         let data = res.json::<OpenAiCompletionResponse>()?;
         return Ok(data);
