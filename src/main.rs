@@ -79,6 +79,14 @@ struct Cli {
     #[arg(long)]
     signature_id: Option<String>,
 
+    /// The path to the ssh key
+    #[arg[long]]
+    ssh_key_path: Option<String>,
+
+    /// The ssh user, i personally have never seen this anything but `git`
+    #[arg[long]]
+    ssh_user: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -257,9 +265,21 @@ fn main() {
         .or(settings["git_information"]["options"]["sign_commit"].as_bool())
         .unwrap_or(false);
 
-    let key_id = cli.signature_id.or(Some(
-        settings["git_information"]["options"]["sign_commit"].to_string(),
+    let gpg_key_id = cli.signature_id.or(Some(
+        settings["git_information"]["options"]["gpg_key_id"].to_string(),
     ));
+
+    let ssh_key_path = cli
+        .ssh_key_path
+        .as_deref()
+        .or(settings["git_information"]["options"]["ssh_key_path"].as_str())
+        .or(Some(&".ssh/id_rsa"));
+
+    let ssh_user = cli
+        .ssh_user
+        .as_deref()
+        .or(settings["git_information"]["options"]["ssh_user"].as_str())
+        .or(Some(&"git"));
 
     let local_repo = cli.local_repo.unwrap_or(PathBuf::from("."));
 
@@ -277,9 +297,11 @@ fn main() {
                 Some(&auto_add),
                 Some(&auto_push),
                 Some(&gpg_sign_commit),
-                key_id.as_ref().map(|s| s.as_str()),
+                gpg_key_id.as_ref().map(|s| s.as_str()),
                 None,
                 None,
+                ssh_key_path,
+                ssh_user,
             );
             debug!("Getting Repository at {:#?}", &local_repo);
             let repo = git.open_repository().expect("Unable to open repository");

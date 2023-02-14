@@ -1,6 +1,8 @@
+use std::path::Path;
+
 use git2::{
-    Commit, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
-    ObjectType, Oid, Repository, Signature,
+    Commit, Cred, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
+    ObjectType, Oid, PushOptions, RemoteCallbacks, Repository, Signature,
 };
 use log::{debug, log_enabled, Level};
 
@@ -21,6 +23,10 @@ pub struct Git<'a> {
     pub user_name: Option<&'a str>,
     /// The git user email - will look in git config if None
     pub user_email: Option<&'a str>,
+    /// The path to the private key, will default to `$HOME/.ssh/id_rsa`
+    pub ssh_key_path: Option<&'a str>,
+    /// The ssh user name, i have never seen where it wasn't git
+    pub ssh_user_name: Option<&'a str>,
 }
 
 /// Default implementation of the Git Opyions
@@ -34,6 +40,8 @@ impl Default for Git<'_> {
             key_id: None,
             user_name: None,
             user_email: None,
+            ssh_key_path: Some("~/.ssh/id_rsa"),
+            ssh_user_name: Some("git"),
         }
     }
 }
@@ -84,6 +92,8 @@ impl<'a> Git<'a> {
         key_id: Option<&'a str>,
         user_name: Option<&'a str>,
         user_email: Option<&'a str>,
+        ssh_key_path: Option<&'a str>,
+        ssh_user_name: Option<&'a str>,
     ) -> Self {
         let g = Git {
             path,
@@ -93,6 +103,8 @@ impl<'a> Git<'a> {
             key_id,
             user_name,
             user_email,
+            ssh_key_path,
+            ssh_user_name,
         };
         return g;
     }
@@ -254,5 +266,36 @@ impl<'a> Git<'a> {
             debug!("{}", self.display_commit(&repo.find_commit(commit_id)?));
         }
         return Ok(commit_id);
+    }
+    /// Push the branch to remote
+    ///
+    /// # Arguments
+    ///
+    /// * `repo` - The repository
+    /// * `branch_name` - The branch name, should be the current one
+    pub fn push_to_remote(&self, repo: &Repository, branch_name: &str) -> Result<(), git2::Error> {
+        debug!("Pushing branch to origin for PR");
+        let mut remote = repo.find_remote("origin")?;
+        debug!("Found origin, creating ssh callback");
+        let mut callbacks = RemoteCallbacks::new();
+        callbacks.credentials(|_, username_from_url, _| {
+            Cred::ssh_key_from_agent(username_from_url.unwrap())
+        });
+        debug!("Callback created, time to push");
+        let mut push_opts = PushOptions::new();
+        push_opts.remote_callbacks(callbacks);
+        debug!("Getting Branch to Push");
+        let branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .unwrap();
+        let refname = format!(
+            "refs/heads/{}",
+            branch
+                .name()
+                .unwrap()
+                .expect("Unable to unwrape the branch name")
+                .trim_start_matches("refs/heads/")
+        );
+        return remote.push(&[&refname], Some(&mut push_opts));
     }
 }
