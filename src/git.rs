@@ -4,192 +4,255 @@ use git2::{
 };
 use log::{debug, log_enabled, Level};
 
-use std::path::PathBuf;
-
-#[derive(Debug)]
-pub struct GitOptions {
-    path: Option<PathBuf>,
-    git_token: Option<String>,
-    git_url: Option<String>,
-    auto_add: Option<bool>,
+/// Struct to hold information for your local Git
+#[derive(Debug, Copy, Clone)]
+pub struct Git<'a> {
+    /// The path, should be '.' unless you have good reason
+    pub path: &'a str,
+    /// Should all untracked files be added to the index.  Basically the same as running `git add .` defaults to false
+    pub auto_add: Option<&'a bool>,
+    /// Should your local branch be pushed before creating a PR, defaults to true
+    pub auto_push: Option<&'a bool>,
+    /// Should commits be pgp signed - will look in git config if None
+    pub sign_commits: Option<&'a bool>,
+    /// The signing key id, this only matters if `sign_commits` is true - will look in git config if None
+    pub key_id: Option<&'a str>,
+    /// The git user name - will look in git config if None
+    pub user_name: Option<&'a str>,
+    /// The git user email - will look in git config if None
+    pub user_email: Option<&'a str>,
 }
 
-impl Default for GitOptions {
+/// Default implementation of the Git Opyions
+impl Default for Git<'_> {
     fn default() -> Self {
-        GitOptions {
-            path: Some(PathBuf::from(".")),
-            git_token: None,
-            git_url: None,
-            auto_add: Some(false),
+        Git {
+            path: ".",
+            auto_add: Some(&false),
+            auto_push: Some(&true),
+            sign_commits: Some(&false),
+            key_id: None,
+            user_name: None,
+            user_email: None,
         }
     }
 }
 
-impl GitOptions {
-    pub fn new() -> Self {
-        debug!("Getting default Options");
-        GitOptions::default()
-    }
+/// GitGub Options
+#[derive(Debug)]
+pub struct GitHubOptions<'a> {
+    /// The GitHub API Token
+    github_token: &'a str,
+    /// The GitHub API URL
+    github_url: &'a str,
+}
 
-    pub fn new_with_remote(git_token: &str, git_url: &str) -> Self {
-        debug!("Getting Options with the Remote API Info");
-        let go = GitOptions {
-            git_token: Some(git_token.to_string()),
-            git_url: Some(git_url.to_string()),
-            path: Some(PathBuf::from(".")),
-            auto_add: Some(false),
+/// The implementation for `GitHubOptions`
+impl<'a> GitHubOptions<'a> {
+    /// Create a new GitHubOptions struct.  Notice nohing is optional
+    ///
+    /// # Arguments
+    ///
+    /// * `github_token` - The Github Token
+    /// * `github_url` - The Github API Url
+    pub fn new(github_token: &'a str, github_url: &'a str) -> Self {
+        GitHubOptions {
+            github_token,
+            github_url,
+        }
+    }
+}
+
+/// The implementation of `Git`
+impl<'a> Git<'a> {
+    /// Create a new Git struct.  Everything but the path is optional
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the repo, should almost always be `.`
+    /// * `auto_add` -  Should all untracked changes be added to the index before the commit
+    /// * `auto_push` - Should git push be called on the branch before the pr
+    /// * `sign_commits` - Should commits be pgp signed
+    /// * `key_id` - The key id, only matters if `sign_commits` is `true`
+    /// * `user_name` - The git user name
+    /// * `user_email` - The git user email
+    pub fn new(
+        path: &'a str,
+        auto_add: Option<&'a bool>,
+        auto_push: Option<&'a bool>,
+        sign_commits: Option<&'a bool>,
+        key_id: Option<&'a str>,
+        user_name: Option<&'a str>,
+        user_email: Option<&'a str>,
+    ) -> Self {
+        let g = Git {
+            path,
+            auto_add,
+            auto_push,
+            sign_commits,
+            key_id,
+            user_name,
+            user_email,
         };
-        return go;
+        return g;
     }
 
-    pub fn new_full(path: &PathBuf, git_token: &str, git_url: &str, auto_add: &bool) -> Self {
-        debug!("Getting options with everything set");
-        let go = GitOptions {
-            git_token: Some(git_token.to_string()),
-            git_url: Some(git_url.to_string()),
-            path: Some(path.to_path_buf()),
-            auto_add: Some(*auto_add),
-        };
-        return go;
+    /// Opens the repository
+    pub fn open_repository(self) -> Result<Repository, git2::Error> {
+        debug!("Getting repository");
+        let repo = Repository::open(self.path)?;
+        return Ok(repo);
     }
-}
-pub fn find_last_commit(repo: &Repository) -> Result<Commit, git2::Error> {
-    let obj = repo.head()?.resolve()?.peel(ObjectType::Commit)?;
-    obj.into_commit()
-        .map_err(|_| git2::Error::from_str("Couldn't find commit"))
-}
 
-pub fn display_commit(commit: &Commit) -> String {
-    let timestamp = commit.time().seconds();
-    let tm = time::at(time::Timespec::new(timestamp, 0));
-    let res = format!(
-        "commit {}\nAuthor: {}\nDate:   {}\n\n    {}",
-        commit.id(),
-        commit.author(),
-        tm.rfc822(),
-        commit.message().unwrap_or("no commit message")
-    );
-    return res;
-}
-
-fn _add_all(repo: &Repository) -> Result<(), git2::Error> {
-    let mut index = repo.index()?;
-    index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
-    return index.write();
-}
-
-pub fn get_repository(git_options: &GitOptions) -> Repository {
-    debug!("Getting repository");
-    let path = git_options
-        .path
-        .as_deref()
-        .expect("Cannot Create the Path Object to the repo");
-    let repo = match Repository::open(path) {
-        Ok(repo) => repo,
-        Err(e) => panic!("failed to open: {}", e),
-    };
-    debug!(
-        "Repo Path={:#?} state={:#?}",
-        repo.path().display(),
-        repo.state()
-    );
-    return repo;
-}
-
-pub fn get_commit_diff<'a>(repo: &'a Repository, git_options: &'a GitOptions) -> Diff<'a> {
-    debug!("Getting Diff between index and HEAD");
-    let last_commit = find_last_commit(repo).expect("Cannot get last commit");
-    if log_enabled!(Level::Debug) {
-        debug!("{}", display_commit(&last_commit));
+    /// find the last commit to this repo
+    ///
+    /// # Arguments
+    ///
+    /// * `repo` - The repository
+    pub fn find_last_commit(self, repo: &Repository) -> Result<Commit, git2::Error> {
+        debug!("Finding last commit");
+        let obj = repo.head()?.resolve()?.peel(ObjectType::Commit)?;
+        obj.into_commit()
+            .map_err(|_| git2::Error::from_str("Couldn't find last commit"))
     }
-    if git_options.auto_add.unwrap_or(false) {
-        debug!("Add flag set, adding all files to index before diff");
-        _add_all(repo).expect("Error Adding Files to Index");
+
+    /// Adds all untracked files to repo (same as running `git add .`)
+    ///
+    /// # Arguments
+    ///
+    /// * `repo` - The repository
+    fn add_all(self, repo: &Repository) -> Result<(), git2::Error> {
+        debug!("Adding all files to the index");
+        let mut index = repo.index()?;
+        index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
+        return index.write();
     }
-    let index = repo.index().expect("Cannot get repo index");
-    let old = last_commit.tree().expect("Unable to get most recent tree");
-    let diff = repo
-        .diff_tree_to_index(Some(&old), Some(&index), Some(&mut DiffOptions::default()))
-        .expect("Cannot generate DIFF");
-    return diff;
-}
 
-pub fn get_diff_text<'a>(diff: &'a Diff, git_options: &'a GitOptions) -> String {
-    let mut diff_content = String::new();
-    let p = diff.print(
-        DiffFormat::Patch,
-        |delta: DiffDelta, hunk: Option<DiffHunk>, line: DiffLine| {
-            let line_num = match line.old_lineno() {
-                Some(num) => num,
-                None => 0,
-            };
+    /// Gets the diff on what is going to be committed.  If `auto_add` is false
+    /// only files you added to the index yourself will be committed.
+    ///
+    /// If you want to see what will be sent this is the equivalent of `git diff --cached`
+    ///
+    /// # Arguments
+    ///
+    /// * `repo` - The repository
+    pub fn get_commit_diff(self, repo: &Repository) -> Result<Diff, git2::Error> {
+        debug!("Creating commit");
+        let last_commit = self.find_last_commit(repo)?;
+        // some helpful debug stuff
+        if log_enabled!(Level::Debug) {
+            debug!("Last commit:");
+            debug!("{}", self.display_commit(&last_commit));
+        }
+        // check for auto add
+        if *self.auto_add.unwrap_or(&false) {
+            debug!("Automatically adding all files to index");
+            self.add_all(repo)?;
+        }
+        // ready to diff
+        let index = repo.index()?;
+        let old_tree = last_commit.tree()?;
+        debug!("Index and Old Tree Prepared, Ready to Diff");
+        let diff = repo.diff_tree_to_index(
+            Some(&old_tree),
+            Some(&index),
+            Some(&mut DiffOptions::default()),
+        )?;
+        return Ok(diff);
+    }
 
-            let a_line = std::str::from_utf8(&line.content()).expect("Non UTF8 Characters in Diff");
-
-            if a_line.starts_with("diff --git") || a_line.starts_with("@@") {
-                diff_content.push_str(&format!(
-                    "{}",
-                    std::str::from_utf8(&line.content()).expect("Non UTF8 Characters in Diff")
-                ));
-            } else {
-                match line.origin() {
-                    '-' => diff_content.push_str("-"),
-
-                    '+' => diff_content.push_str("+"),
-
-                    _ => diff_content.push_str(" "),
+    /// Convient method to turn a `Diff` to a `String`
+    /// Will panic if there are any non-UTF8 characters in the generated diff
+    /// although I don't know how that could happen
+    ///
+    /// # Arguments
+    ///
+    /// * `diff` - The diff
+    pub fn diff_to_string(&self, diff: &Diff) -> Result<String, git2::Error> {
+        debug!("Turning diff to a string");
+        let mut diff_content = String::new();
+        let p = diff.print(
+            DiffFormat::Patch,
+            |delta: DiffDelta, hunk: Option<DiffHunk>, line: DiffLine| {
+                let line_num = match line.old_lineno() {
+                    Some(num) => num,
+                    None => 0,
                 };
-                diff_content.push_str(&format!("{}", line_num));
-                diff_content.push_str(&format!(
-                    " {}",
-                    std::str::from_utf8(&line.content()).expect("Non UTF8 Characters in Diff")
-                ));
-            }
 
-            true
-        },
-    );
-    match p {
-        Ok(..) => debug!("We did it, we printed the diff"),
-        Err(..) => debug!("I guess not"),
+                let a_line =
+                    std::str::from_utf8(&line.content()).expect("Non UTF8 Characters in Diff");
+
+                if a_line.starts_with("diff --git") || a_line.starts_with("@@") {
+                    diff_content.push_str(&format!(
+                        "{}",
+                        std::str::from_utf8(&line.content()).expect("Non UTF8 Characters in Diff")
+                    ));
+                } else {
+                    match line.origin() {
+                        '-' => diff_content.push_str("-"),
+
+                        '+' => diff_content.push_str("+"),
+
+                        _ => diff_content.push_str(" "),
+                    };
+                    diff_content.push_str(&format!("{}", line_num));
+                    diff_content.push_str(&format!(
+                        " {}",
+                        std::str::from_utf8(&line.content()).expect("Non UTF8 Characters in Diff")
+                    ));
+                }
+
+                true
+            },
+        )?;
+        return Ok(diff_content);
     }
-    return diff_content;
-}
 
-pub fn make_commit(
-    repo: &Repository,
-    message: &str,
-    settings: &serde_json::Value,
-) -> Result<Oid, git2::Error> {
-    debug!("Committing files to repo");
+    /// Convient method to pretty-print a commit
+    ///
+    /// # Arguments
+    ///
+    /// * `commit` - The commit
+    pub fn display_commit(&self, commit: &Commit) -> String {
+        let timestamp = commit.time().seconds();
+        let tm = time::at(time::Timespec::new(timestamp, 0));
+        let res = format!(
+            "commit {}\nAuthor: {}\nDate:   {}\n\n    {}",
+            commit.id(),
+            commit.author(),
+            tm.rfc822(),
+            commit.message().unwrap_or("no commit message")
+        );
+        return res;
+    }
 
-    let git_config = repo.config()?;
-    let user_email = match settings["git_information"]["options"]["user_email"].as_str() {
-        Some(email) => email.to_string(),
-        None => git_config.get_string("user.email")?.to_string(),
-    };
-    let user_name = match settings["git_information"]["options"]["user_name"].as_str() {
-        Some(email) => email.to_string(),
-        None => git_config.get_string("user.name")?.to_string(),
-    };
-    debug!(
-        "Using the following values for the commit {} {}",
-        user_name, user_email
-    );
-    let sig = Signature::now(&user_name, &user_email).expect("Error Generating Signature");
-
-    debug!("Preparing actual commit");
-    let last_commit = find_last_commit(repo).expect("Cannot get last commit");
-    let tree_id = repo.index()?.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    let commit_id = repo.commit(
-        Some("HEAD"),    //  point HEAD to our new commit
-        &sig,            // author
-        &sig,            // committer
-        message,         // commit message
-        &tree,           // tree
-        &[&last_commit], // parents
-    )?;
-    debug!("Commit worked id = {}", commit_id.to_string());
-    return Ok(commit_id);
+    /// Actually make the commit
+    ///
+    /// # Arguments
+    ///
+    /// * `repo` - The repository
+    /// * `msg` - The commit message: hopefully from the AI
+    pub fn make_commit(&self, repo: &Repository, msg: &str) -> Result<Oid, git2::Error> {
+        debug!("Performing commit");
+        let git_config = repo.config()?;
+        let user_name = match self.user_name {
+            Some(name) => name,
+            None => git_config.get_str("user.name")?,
+        };
+        let user_email = match self.user_email {
+            Some(email) => email,
+            None => git_config.get_str("user.email")?,
+        };
+        debug!("{} {} is doing the commit", &user_name, &user_email);
+        let sig = Signature::now(user_name, user_email)?;
+        let last_commit = self.find_last_commit(repo)?;
+        let index_tree_id = repo.index()?.write_tree()?;
+        let index_tree = repo.find_tree(index_tree_id)?;
+        let commit_id = repo.commit(Some("HEAD"), &sig, &sig, msg, &index_tree, &[&last_commit])?;
+        if log_enabled!(Level::Debug) {
+            debug!("New commit:");
+            debug!("{}", self.display_commit(&repo.find_commit(commit_id)?));
+        }
+        return Ok(commit_id);
+    }
 }

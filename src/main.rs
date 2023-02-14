@@ -10,9 +10,7 @@ use termion::input::TermRead;
 use termios::{tcsetattr, Termios, TCSAFLUSH};
 
 use crate::ai::{OpenAiClient, Prompt};
-use crate::git::{
-    display_commit, get_commit_diff, get_diff_text, get_repository, make_commit, GitOptions,
-};
+use crate::git::{Git, GitHubOptions};
 
 pub mod ai;
 pub mod git;
@@ -60,6 +58,10 @@ struct Cli {
     /// Turns Auto AI mode on automatically accepts the AI message without review DANGEROUS
     #[arg(short = 'i', long, action = clap::ArgAction::SetTrue)]
     auto_ai: Option<bool>,
+
+    /// Turns Auto Push mode on which pushes local to remote before the pr, detfaults to true
+    #[arg(short = 'u', long, action = clap::ArgAction::SetFalse)]
+    auto_push: Option<bool>,
 
     /// Number of times to try the AI: Note OpenAI Chatbot is not Idenpotent
     #[arg(short, long, value_name = "TRIES", value_parser=_allowed_num_tries)]
@@ -119,7 +121,11 @@ fn get_settings(p: Option<PathBuf>) -> Result<Value, Box<dyn std::error::Error>>
         return Ok(data);
     } else {
         debug!("{:#?} does not exist, creating a blank one", &settings_path);
-        fs::create_dir_all(&settings_path)?;
+        fs::create_dir_all(
+            &settings_path
+                .parent()
+                .expect("Cannot create the directory $HOME/.gitai"),
+        )?;
         let mut f = File::create(&settings_path).unwrap();
         f.write_all(DEFAULT_FILE.as_bytes())
             .expect("Unable to write default file");
@@ -177,7 +183,10 @@ fn main() {
     let cli = Cli::parse();
 
     debug!("Reading settings file");
-    let settings = get_settings(cli.config).unwrap();
+    let settings = match get_settings(cli.config) {
+        Ok(s) => s,
+        Err(e) => panic!("No settings.json exists, we created a blank one at ~/.gitai"),
+    };
 
     debug!("Setting Variables");
     let ai_token = cli
@@ -228,6 +237,11 @@ fn main() {
         .or(settings["git_information"]["options"]["auto_add"].as_bool())
         .unwrap_or(false);
 
+    let auto_push = cli
+        .auto_push
+        .or(settings["git_information"]["options"]["auto_push"].as_bool())
+        .unwrap_or(true);
+
     let stochastic = cli
         .stochastic
         .or(settings["ai_information"]["options"]["stochastic"].as_bool())
@@ -243,18 +257,9 @@ fn main() {
         .or(settings["git_information"]["options"]["sign_commit"].as_bool())
         .unwrap_or(false);
 
-    let mut key_id = String::new();
-    let mut key_signature = String::new();
-    if gpg_sign_commit {
-        let key_id = cli
-            .signature_id
-            .or(Some(
-                settings["git_information"]["options"]["gpg_key_id"].to_string(),
-            ))
-            .expect("If signing, the key ID musy be set");
-        let key_signature =
-            Some(settings["git_information"]["options"]["gpg_key_signature"].to_string());
-    }
+    let key_id = cli.signature_id.or(Some(
+        settings["git_information"]["options"]["sign_commit"].to_string(),
+    ));
 
     let local_repo = cli.local_repo.unwrap_or(PathBuf::from("."));
 
@@ -267,20 +272,27 @@ fn main() {
     debug!("Matching CLI Command");
     match &cli.command {
         Some(Commands::Commit {}) => {
-            let git_options = GitOptions::new_full(
-                &local_repo,
-                &git_token.unwrap(),
-                &git_url.unwrap(),
-                &auto_add,
+            let git = Git::new(
+                local_repo.to_str().unwrap_or("."),
+                Some(&auto_add),
+                Some(&auto_push),
+                Some(&gpg_sign_commit),
+                key_id.as_ref().map(|s| s.as_str()),
+                None,
+                None,
             );
             debug!("Getting Repository at {:#?}", &local_repo);
-            let repo = get_repository(&git_options);
+            let repo = git.open_repository().expect("Unable to open repository");
 
             debug!("Getting Diff for {:#?}", &local_repo);
-            let diff = get_commit_diff(&repo, &git_options);
+            let diff = git.get_commit_diff(&repo).expect(
+                "Unable to create git diff, try running git diff --cached to see if it works",
+            );
+            let git_diff_text = git
+                .diff_to_string(&diff)
+                .expect("Unable to parse generated git diff");
 
             debug!("Got Diff, Its OpenA Time");
-            let git_diff_text = get_diff_text(&diff, &git_options);
             let client = OpenAiClient::new(ai_url, ai_token);
 
             debug!("We have a client, lets build the prompt");
@@ -312,15 +324,16 @@ fn main() {
             debug!("Are we going to use this message? {}", answer);
 
             if answer {
-                let oid = match make_commit(&repo, &text, &settings) {
-                    Ok(oid) => oid,
-                    Err(e) => panic!("{}", e),
-                };
-                debug!("Commit worked, returned {}", oid.to_string());
-                let _c = repo
-                    .find_commit(oid)
-                    .expect("For some reason the commit cannot be found in the repo");
-                info!("{}", display_commit(&_c));
+                let oid = git.make_commit(&repo, &text).expect("Commit Failed");
+                if log_enabled!(Level::Debug) {
+                    debug!("Commit worked, returned {}", oid.to_string());
+                    let new_commit = repo
+                        .find_commit(oid)
+                        .expect("Cammpt find new commit, thats odd.");
+                    debug!("{}", git.display_commit(&new_commit))
+                }
+
+                info!("Commit Successful, OID={}", oid.to_string());
             } else {
                 info!("Sorry, feel free to try again. OpenAi is not idenpotent");
                 info!(
