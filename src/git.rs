@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use git2::{
     Commit, Cred, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
     ObjectType, Oid, PushOptions, RemoteCallbacks, Repository, Signature,
