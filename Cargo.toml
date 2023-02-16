@@ -21,4 +21,5 @@ url = "2.3.1"
 time = "0.1.40"
 termion = "2.0.1"
 termios = "0.3.3"
-schemars = { version = "0.8.11", features = ["chrono"] }
+config = { version = "0.13.3", features = ["json"]}
+serde_derive = "1.0.152"

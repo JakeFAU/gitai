@@ -3,6 +3,7 @@ use git2::{
     ObjectType, Oid, PushOptions, RemoteCallbacks, Repository, Signature,
 };
 use log::{debug, log_enabled, Level};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 
 /// Struct to hold information for your local Git
 #[derive(Debug, Copy, Clone)]
@@ -38,34 +39,40 @@ impl Default for Git<'_> {
             key_id: None,
             user_name: None,
             user_email: None,
-            ssh_key_path: Some("~/.ssh/id_rsa"),
-            ssh_user_name: Some("git"),
+            ssh_key_path: Some(&"~/.ssh/id_rsa"),
+            ssh_user_name: Some(&"git"),
         }
     }
 }
 
 /// GitGub Options
-#[derive(Debug)]
-pub struct GitHubOptions<'a> {
+#[derive(Debug, Default)]
+pub struct GitHub {
     /// The GitHub API Token
-    github_token: &'a str,
+    github_token: String,
     /// The GitHub API URL
-    github_url: &'a str,
+    github_url: String,
+    /// the GitHub user name
+    github_username: String,
 }
 
 /// The implementation for `GitHubOptions`
-impl<'a> GitHubOptions<'a> {
-    /// Create a new GitHubOptions struct.  Notice nohing is optional
+impl GitHub {
+    /// Create a new GitHub struct.
     ///
     /// # Arguments
     ///
     /// * `github_token` - The Github Token
     /// * `github_url` - The Github API Url
-    pub fn new(github_token: &'a str, github_url: &'a str) -> Self {
-        GitHubOptions {
-            github_token,
-            github_url,
-        }
+    pub fn new(github_token: &str, github_url: &str) -> Self {
+        let user_name =
+            get_value_from_api(github_url, github_token, "login", "user").unwrap_or_default();
+        let g = GitHub {
+            github_token: github_token.to_string(),
+            github_url: github_url.to_string(),
+            github_username: user_name,
+        };
+        return g;
     }
 }
 
@@ -296,4 +303,42 @@ impl<'a> Git<'a> {
         );
         return remote.push(&[&refname], Some(&mut push_opts));
     }
+}
+
+// Helper functions
+fn get_value_from_api(
+    base_url: &str,
+    token: &str,
+    key: &str,
+    url_tail: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let client = reqwest::blocking::Client::new();
+    let url = format!("{}/{}", base_url, url_tail);
+    let mut headers: HeaderMap = HeaderMap::new();
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token)).expect("Unable to set Auth Header"),
+    );
+    headers.insert(
+        "X-GitHub-Api-Version",
+        HeaderValue::from_static("2022-11-28"),
+    );
+
+    let response = client
+        .get(&url)
+        .headers(headers)
+        .send()?
+        .json::<serde_json::Value>()?;
+
+    if let Some(value) = response.get(key) {
+        if let Some(value_str) = value.as_str() {
+            return Ok(value_str.to_string());
+        }
+    }
+
+    Err("Unable to extract value from API response".into())
 }

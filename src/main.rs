@@ -1,17 +1,13 @@
 use clap::{Parser, Subcommand};
-use dirs_next::home_dir;
-use log::{debug, error, info, log_enabled, Level};
-use serde_json::{from_reader, Value};
-use std::fs::File;
-use std::io::{self, Read, Write};
+use log::{debug, info, log_enabled, Level};
+
+use std::io::{self, Write};
 use std::path::PathBuf;
-use std::str::FromStr;
-use std::{env, fs};
 use termion::input::TermRead;
 use termios::{tcsetattr, Termios, TCSAFLUSH};
 
 use crate::ai::{OpenAiClient, Prompt};
-use crate::git::{Git, GitHubOptions};
+use crate::git::{Git, GitHub};
 use crate::settings::Settings;
 
 pub mod ai;
@@ -71,8 +67,12 @@ struct Cli {
     num_tries: Option<u8>,
 
     /// Sign Commits, if set some variables must be added to settings.json
-    #[arg(short, long, action = clap::ArgAction::SetTrue)]
+    #[arg(long, action = clap::ArgAction::SetTrue)]
     gpg_sign_commit: Option<bool>,
+
+    /// the signing key, only matters if `gpg_sign_commit` is true.
+    #[arg(long)]
+    gpg_key_id: Option<String>,
 
     /// Programming Language, very useful for small commits/pr
     #[arg(short, long, value_name = "LANGUAGE")]
@@ -159,133 +159,77 @@ fn main() {
     let cli = Cli::parse();
 
     debug!("Reading settings file");
-    let settings = Settings::from(
-        cli.local_repo
-            .unwrap_or(PathBuf::from_str("~/.gitai/settings.json").expect("Illegal PathBuf")),
-    );
+    let settings = Settings::new().expect("Unable to load settings file at ~/.gitai/settings.json");
 
     debug!("Setting Variables");
-    let ai_token = cli
-        .open_ai_token
-        .or(env::var("AI_OPENAI_TOKEN").ok())
-        .or(Some(settings.ai_settings.api_key))
-        .expect("OpenAI Token Must be set");
+    //ai variables
+    let ai_token = cli.open_ai_token.unwrap_or(settings.ai_settings.api_key);
+    let ai_url = cli.open_ai_url.unwrap_or(settings.ai_settings.api_url);
+    debug!("AI Variables Set url={}", ai_url);
 
-    let ai_url = cli
-        .open_ai_url
-        .or(env::var("AI_OPENAI_URL").ok())
-        .or(Some(settings.ai_settings.api_url))
-        .expect("OpenAI Token Must be set");
-
-    let git_token = cli
+    // github variables
+    let github_token = cli
         .github_token
-        .or(env::var("AI_GITHUB_TOKEN").ok())
-        .or(settings.git_settings.unwrap().github_api_key);
-
-    let git_url = cli
+        .unwrap_or(settings.git_settings.github_api_key);
+    let github_url = cli
         .github_url
-        .or(env::var("AI_GITHUB_URL").ok())
-        .or(settings.git_settings.unwrap().github_api_url);
+        .unwrap_or(settings.git_settings.github_api_url);
+    debug!("GitHub Variables Set url={}", github_url);
 
-    let language = cli.programming_language.or(settings
-        .ai_settings
-        .ai_options
-        .unwrap()
-        .prompt
-        .unwrap()
-        .language);
+    // other variables - not flags first
+    let language = cli
+        .programming_language
+        .or(Some(settings.ai_settings.ai_options.prompt.language))
+        .unwrap_or("Python".to_string());
+
+    let num_tries = cli
+        .num_tries
+        .or(Some(settings.ai_settings.ai_options.n))
+        .unwrap_or(1);
+
+    let ssh_key_path = cli
+        .ssh_key_path
+        .or(Some(settings.git_settings.git_options.ssh_key_path))
+        .unwrap_or("~/.ssh/id_rsa".to_string());
+
+    let ssh_user =
+        Some(settings.git_settings.git_options.ssh_user_name).unwrap_or("git".to_string());
+
+    let local_repo = cli
+        .local_repo
+        .or(Some(settings.git_settings.git_options.local_path))
+        .unwrap_or(PathBuf::from("."));
+
+    let gpg_key_id = cli
+        .gpg_key_id
+        .or(Some(settings.git_settings.git_options.key_id))
+        .unwrap_or_default();
 
     // Flags
-    let auto_ai = cli.auto_ai.or(Some(
-        settings
-            .ai_settings
-            .ai_options
-            .unwrap()
-            .auto_ai
-            .unwrap_or(false),
-    ));
+    let auto_ai = cli
+        .auto_ai
+        .or(Some(settings.ai_settings.ai_options.auto_ai))
+        .unwrap_or(false);
 
-    let auto_add = cli.auto_add.or(Some(
-        settings
-            .git_settings
-            .unwrap()
-            .git_options
-            .unwrap()
-            .auto_add
-            .unwrap_or(false),
-    ));
+    let auto_add = cli
+        .auto_add
+        .or(Some(settings.git_settings.git_options.auto_add))
+        .unwrap_or(false);
 
-    let auto_push = cli.auto_push.or(Some(
-        settings
-            .git_settings
-            .unwrap()
-            .git_options
-            .unwrap()
-            .auto_push
-            .unwrap_or(true),
-    ));
+    let auto_push = cli
+        .auto_push
+        .or(Some(settings.git_settings.git_options.auto_push))
+        .unwrap_or(true);
 
-    let stochastic = cli.stochastic.or(Some(
-        settings
-            .ai_settings
-            .ai_options
-            .unwrap()
-            .stochastic
-            .unwrap_or_default(),
-    ));
+    let stochastic = cli
+        .stochastic
+        .or(Some(settings.ai_settings.ai_options.stochastic))
+        .unwrap_or(false);
 
-    let num_tries = cli.num_tries.or(Some(
-        settings.ai_settings.ai_options.unwrap().n.unwrap_or(1),
-    ));
-
-    let gpg_sign_commits = cli.gpg_sign_commit.or(Some(
-        settings
-            .git_settings
-            .unwrap()
-            .git_options
-            .unwrap()
-            .sign_commits
-            .unwrap_or(false),
-    ));
-
-    let gpg_key_id = cli.signature_id.or(Some(
-        settings
-            .git_settings
-            .unwrap()
-            .git_options
-            .unwrap()
-            .key_id
-            .unwrap_or_default(),
-    ));
-
-    let ssh_key_path = cli.ssh_key_path.or(Some(
-        settings
-            .git_settings
-            .unwrap()
-            .git_options
-            .unwrap()
-            .ssh_key_path
-            .unwrap_or("~/.ssh/id_rsa".to_string()),
-    ));
-    let ssh_key_path = cli.ssh_key_path.or(Some(
-        settings
-            .git_settings
-            .unwrap()
-            .git_options
-            .unwrap()
-            .ssh_user_name
-            .unwrap_or("git".to_string()),
-    ));
-
-    let local_repo = cli.local_repo.or(Some(PathBuf::from(
-        settings
-            .git_settings
-            .unwrap()
-            .git_options
-            .unwrap()
-            .local_path
-            .unwrap_or("git".to_string()),
-    )));
+    let gpg_sign_commits = cli
+        .gpg_sign_commit
+        .or(Some(settings.git_settings.git_options.sign_commits))
+        .unwrap_or(false);
 
     debug!("Variables Set OpenAI Url={:#?} should not be null", ai_url);
     debug!(
@@ -297,18 +241,15 @@ fn main() {
     match &cli.command {
         Some(Commands::Commit {}) => {
             let git = Git::new(
-                local_repo
-                    .unwrap_or(PathBuf::new())
-                    .to_str()
-                    .expect("Come on, Git Need Some Sort of Path"),
-                Some(&auto_add.unwrap()),
-                Some(&auto_push.unwrap()),
-                Some(&gpg_sign_commits.unwrap()),
-                Some(&gpg_key_id.unwrap()),
+                local_repo.to_str().unwrap_or("."),
+                Some(&auto_add),
+                Some(&auto_push),
+                Some(&gpg_sign_commits),
+                Some(&gpg_key_id),
                 None,
                 None,
-                Some(&ssh_key_path.unwrap()),
-                Some(&ssh_key_path.unwrap()),
+                Some(&ssh_key_path),
+                Some(&ssh_user),
             );
             debug!("Getting Repository at {:#?}", &local_repo);
             let repo = git.open_repository().expect("Unable to open repository");
@@ -326,7 +267,7 @@ fn main() {
 
             debug!("We have a client, lets build the prompt");
             let mut prompt = Prompt::default();
-            prompt.language = language;
+            prompt.language = Some(language);
             prompt.git_diff = Some(git_diff_text);
             if log_enabled!(Level::Debug) {
                 debug!("{}", prompt.git_diff.as_ref().unwrap());
@@ -339,7 +280,7 @@ fn main() {
             let open_ai_first_completion = open_ai_choices
                 .first()
                 .expect("OpenAI didn't send back any choices");
-            let mut open_ai_completion_text = open_ai_first_completion
+            let open_ai_completion_text = open_ai_first_completion
                 .text
                 .as_ref()
                 .expect("OpenAI didn't send back any message");
@@ -376,6 +317,8 @@ fn main() {
         }
         Some(Commands::PR { from, to }) => {
             info!("Generating PR from {:#?} to {:#?}", from, to);
+            let g_hub = GitHub::new(github_token.as_str(), github_url.as_str());
+            println!("{:#?}", g_hub)
         }
         Some(Commands::Models {}) => {
             info!("Getting Available Models");
