@@ -1,7 +1,7 @@
 use config::{Config, ConfigError, Environment, File};
 use log::{debug, log_enabled, Level};
 use serde_derive::Deserialize;
-use std::{path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr, default};
 
 /// The main struct for settingsm just holds ai_settings and git_settings
 #[derive(Debug, Deserialize)]
@@ -11,6 +11,12 @@ pub struct Settings {
     pub ai_settings: AiSettings,
     /// Git Settings
     pub git_settings: GitSettings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { ai_settings: AiSettings::default(), git_settings: GitSettings::default() }
+    }
 }
 
 /// AI Settings
@@ -23,6 +29,12 @@ pub struct AiSettings {
     pub api_url: String,
     /// Options for OpenAI
     pub ai_options: AiOptions,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        AiSettings { api_key: String::new(), api_url: String::new(), ai_options: AiOptions::default() }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,13 +70,13 @@ pub struct AiOptions {
     //// Up to 4 sequences where the API will stop generating further tokens.
     /// The returned text will not contain the stop sequence.
     pub stop: Vec<String>,
-    /// Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, 
+    /// Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far,
     /// increasing the model's likelihood to talk about new topics.
     pub presence_penalty: f32,
-    /// Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, 
+    /// Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far,
     /// decreasing the model's likelihood to repeat the same line verbatim.
     pub frequency_penalty: f32,
-    /// Generates best_of completions server-side and returns the "best" (the one with the highest log probability per token). 
+    /// Generates best_of completions server-side and returns the "best" (the one with the highest log probability per token).
     /// Results cannot be streamed.
     /// When used with n, best_of controls the number of candidate completions and n specifies how many to return
     ///  – best_of must be greater than n.
@@ -78,25 +90,25 @@ pub struct AiOptions {
     pub stochastic: bool,
 }
 
-/// Default implementation, the defaults here **EXCEPT** for prompt are pretty good. 
+/// Default implementation, the defaults here **EXCEPT** for prompt are pretty good.
 ///  See `AiPrompt` for more info
 impl Default for AiOptions {
     fn default() -> Self {
-        AiOptions { 
-            model: "code-davinci-00".to_string(), 
-            max_tokens: 256, 
-            temperature: 0.05, 
-            top_p: 1.0, 
-            n: 1, 
-            logprobs: 0, 
-            echo: false, 
-            stop: vec!["".into()], 
-            presence_penalty: 0.1, 
-            frequency_penalty: 0.1, 
-            best_of: 1, 
-            prompt: AiPrompt::default(), 
-            auto_ai: false, 
-            stochastic: false 
+        AiOptions {
+            model: "code-davinci-00".to_string(),
+            max_tokens: 256,
+            temperature: 0.05,
+            top_p: 1.0,
+            n: 1,
+            logprobs: 0,
+            echo: false,
+            stop: vec!["".into()],
+            presence_penalty: 0.1,
+            frequency_penalty: 0.1,
+            best_of: 1,
+            prompt: AiPrompt::default(),
+            auto_ai: false,
+            stochastic: false
         }
     }
 }
@@ -122,11 +134,11 @@ pub struct AiPrompt {
 /// **NOTE** `language` amd `git_diff` should be changed from their default values
 impl Default for AiPrompt {
     fn default() -> Self {
-        AiPrompt { 
-            preamble: "Imagine you are the most experianced ".to_string(), 
+        AiPrompt {
+            preamble: "Imagine you are the most experianced ".to_string(),
             language: "python ".to_string(),
             postamble: "in the world.  You were just handed the below Git Diff file to review.  Please summarize the changes encoded in the Git Diff".to_string(),
-            seperator: '-', 
+            seperator: '-',
             git_diff: DEFAULT_CODE.to_string(),
             postmessage: "Please limit yourself to one paragraph".to_string()
         }
@@ -143,6 +155,12 @@ pub struct GitSettings {
     pub github_api_url: String,
     /// Varioud Git Optionss
     pub git_options: GitOptions,
+}
+
+impl Default for GitSettings {
+    fn default() -> Self {
+        GitSettings { github_api_key: String::new(), github_api_url: String::new(), git_options: GitOptions::default() }
+    }
 }
 
 /// Options for Git/GitHub
@@ -171,16 +189,16 @@ pub struct GitOptions {
 
 impl Default for GitOptions {
     fn default() -> Self {
-        GitOptions { 
-            local_path: PathBuf::from_str(".").expect("Unable to create PathBuf"), 
-            auto_add: false, 
-            auto_push: true, 
-            sign_commits: false, 
-            key_id: String::new(), 
-            git_user_name: String::new(), 
-            git_user_email: String::new(), 
-            ssh_key_path: String::new(), 
-            ssh_user_name: String::new() 
+        GitOptions {
+            local_path: PathBuf::from_str(".").expect("Unable to create PathBuf"),
+            auto_add: false,
+            auto_push: true,
+            sign_commits: false,
+            key_id: String::new(),
+            git_user_name: String::new(),
+            git_user_email: String::new(),
+            ssh_key_path: String::new(),
+            ssh_user_name: String::new()
         }
     }
 }
