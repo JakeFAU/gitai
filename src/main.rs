@@ -1,19 +1,18 @@
 use clap::{Parser, Subcommand};
-use dirs_next::home_dir;
-use log::{debug, error, info, log_enabled, Level};
-use serde_json::{from_reader, Value};
-use std::fs::File;
-use std::io::{self, Read, Write};
+use log::{debug, info, log_enabled, Level};
+
+use std::io::{self, Write};
 use std::path::PathBuf;
-use std::{env, fs};
 use termion::input::TermRead;
 use termios::{tcsetattr, Termios, TCSAFLUSH};
 
 use crate::ai::{OpenAiClient, Prompt};
-use crate::git::{Git, GitHubOptions};
+use crate::git::{Git, GitHub};
+use crate::settings::Settings;
 
 pub mod ai;
 pub mod git;
+pub mod settings;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -65,11 +64,15 @@ struct Cli {
 
     /// Number of times to try the AI: Note OpenAI Chatbot is not Idenpotent
     #[arg(short, long, value_name = "TRIES", value_parser=_allowed_num_tries)]
-    num_tries: Option<u64>,
+    num_tries: Option<u8>,
 
     /// Sign Commits, if set some variables must be added to settings.json
-    #[arg(short, long, action = clap::ArgAction::SetTrue)]
+    #[arg(long, action = clap::ArgAction::SetTrue)]
     gpg_sign_commit: Option<bool>,
+
+    /// the signing key, only matters if `gpg_sign_commit` is true.
+    #[arg(long)]
+    gpg_key_id: Option<String>,
 
     /// Programming Language, very useful for small commits/pr
     #[arg(short, long, value_name = "LANGUAGE")]
@@ -78,6 +81,14 @@ struct Cli {
     /// Signing Key ID: Note, ignored if sign_commit=false
     #[arg(long)]
     signature_id: Option<String>,
+
+    /// The path to the ssh key
+    #[arg[long]]
+    ssh_key_path: Option<String>,
+
+    /// The ssh user, i personally have never seen this anything but `git`
+    #[arg[long]]
+    ssh_user: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -98,47 +109,12 @@ enum Commands {
     Models {},
 }
 
-fn get_settings(p: Option<PathBuf>) -> Result<Value, Box<dyn std::error::Error>> {
-    let default_path: PathBuf = [
-        home_dir()
-            .expect("HOMEDIR Not Set")
-            .to_str()
-            .expect("Invalid HOMEDIR"),
-        ".gitai",
-        "settings.json",
-    ]
-    .iter()
-    .collect();
-    let settings_path = p.unwrap_or(default_path);
-    debug!("Checking {:#?} to see if it exists", &settings_path);
-    if settings_path.exists() {
-        let mut file = File::open(settings_path.as_path()).unwrap();
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)
-            .expect("couldn't read the file");
-        let data: serde_json::Value =
-            from_reader(contents.as_bytes()).expect("couldn't parse the JSON");
-        return Ok(data);
-    } else {
-        debug!("{:#?} does not exist, creating a blank one", &settings_path);
-        fs::create_dir_all(
-            &settings_path
-                .parent()
-                .expect("Cannot create the directory $HOME/.gitai"),
-        )?;
-        let mut f = File::create(&settings_path).unwrap();
-        f.write_all(DEFAULT_FILE.as_bytes())
-            .expect("Unable to write default file");
-        return Err("No settings.json exists, we created a blank one at ~/.gitai".into());
-    }
-}
-
 fn _allowed_num_tries(s: &str) -> Result<u8, String> {
     clap_num::number_range(s, 1, 3)
 }
 
 fn restore_terminal() -> io::Result<()> {
-    let mut old_termios = Termios::from_fd(0)?;
+    let old_termios = Termios::from_fd(0)?;
     tcsetattr(0, TCSAFLUSH, &old_termios)?;
     Ok(())
 }
@@ -183,85 +159,77 @@ fn main() {
     let cli = Cli::parse();
 
     debug!("Reading settings file");
-    let settings = match get_settings(cli.config) {
-        Ok(s) => s,
-        Err(e) => panic!("No settings.json exists, we created a blank one at ~/.gitai"),
-    };
+    let settings = Settings::new().expect("Unable to load settings file at ~/.gitai/settings.json");
 
     debug!("Setting Variables");
-    let ai_token = cli
-        .open_ai_token
-        .or(env::var("AI_OPENAI_TOKEN").ok())
-        .or(settings["ai_information"]["api_token"]
-            .as_str()
-            .map(|s| s.to_owned()))
-        .expect("AI_TOKEN Must be set");
+    //ai variables
+    let ai_token = cli.open_ai_token.unwrap_or(settings.ai_settings.api_key);
+    let ai_url = cli.open_ai_url.unwrap_or(settings.ai_settings.api_url);
+    debug!("AI Variables Set url={}", ai_url);
 
-    let ai_url = cli
-        .open_ai_url
-        .or(env::var("AI_OPENAI_URL").ok())
-        .or(settings["ai_information"]["api_url"]
-            .as_str()
-            .map(|s| s.to_owned()))
-        .expect("AI_URL Must be set");
-
-    let git_token = cli
+    // github variables
+    let github_token = cli
         .github_token
-        .or(env::var("AI_GIT_TOKEN").ok())
-        .or(settings["git_information"]["api_token"]
-            .as_str()
-            .map(|s| s.to_owned()));
-
-    let git_url = cli
+        .unwrap_or(settings.git_settings.github_api_key);
+    let github_url = cli
         .github_url
-        .or(env::var("AI_GIT_URL").ok())
-        .or(settings["git_information"]["api_url"]
-            .as_str()
-            .map(|s| s.to_owned()));
+        .unwrap_or(settings.git_settings.github_api_url);
+    debug!("GitHub Variables Set url={}", github_url);
 
+    // other variables - not flags first
     let language = cli
         .programming_language
-        .or(settings["ai_information"]["options"]["language"]
-            .as_str()
-            .map(|s| s.to_owned()))
+        .or(Some(settings.ai_settings.ai_options.prompt.language))
+        .unwrap_or("Python".to_string());
+
+    let num_tries = cli
+        .num_tries
+        .or(Some(settings.ai_settings.ai_options.n))
+        .unwrap_or(1);
+
+    let ssh_key_path = cli
+        .ssh_key_path
+        .or(Some(settings.git_settings.git_options.ssh_key_path))
+        .unwrap_or("~/.ssh/id_rsa".to_string());
+
+    let ssh_user =
+        Some(settings.git_settings.git_options.ssh_user_name).unwrap_or("git".to_string());
+
+    let local_repo = cli
+        .local_repo
+        .or(Some(settings.git_settings.git_options.local_path))
+        .unwrap_or(PathBuf::from("."));
+
+    let gpg_key_id = cli
+        .gpg_key_id
+        .or(Some(settings.git_settings.git_options.key_id))
         .unwrap_or_default();
 
     // Flags
     let auto_ai = cli
         .auto_ai
-        .or(settings["ai_information"]["options"]["auto_ai"].as_bool())
+        .or(Some(settings.ai_settings.ai_options.auto_ai))
         .unwrap_or(false);
 
     let auto_add = cli
         .auto_add
-        .or(settings["git_information"]["options"]["auto_add"].as_bool())
+        .or(Some(settings.git_settings.git_options.auto_add))
         .unwrap_or(false);
 
     let auto_push = cli
         .auto_push
-        .or(settings["git_information"]["options"]["auto_push"].as_bool())
+        .or(Some(settings.git_settings.git_options.auto_push))
         .unwrap_or(true);
 
     let stochastic = cli
         .stochastic
-        .or(settings["ai_information"]["options"]["stochastic"].as_bool())
+        .or(Some(settings.ai_settings.ai_options.stochastic))
         .unwrap_or(false);
 
-    let num_tries = cli
-        .num_tries
-        .or(settings["ai_information"]["options"]["num_tries"].as_u64())
-        .unwrap_or(1);
-
-    let gpg_sign_commit = cli
+    let gpg_sign_commits = cli
         .gpg_sign_commit
-        .or(settings["git_information"]["options"]["sign_commit"].as_bool())
+        .or(Some(settings.git_settings.git_options.sign_commits))
         .unwrap_or(false);
-
-    let key_id = cli.signature_id.or(Some(
-        settings["git_information"]["options"]["sign_commit"].to_string(),
-    ));
-
-    let local_repo = cli.local_repo.unwrap_or(PathBuf::from("."));
 
     debug!("Variables Set OpenAI Url={:#?} should not be null", ai_url);
     debug!(
@@ -276,10 +244,12 @@ fn main() {
                 local_repo.to_str().unwrap_or("."),
                 Some(&auto_add),
                 Some(&auto_push),
-                Some(&gpg_sign_commit),
-                key_id.as_ref().map(|s| s.as_str()),
+                Some(&gpg_sign_commits),
+                Some(&gpg_key_id),
                 None,
                 None,
+                Some(&ssh_key_path),
+                Some(&ssh_user),
             );
             debug!("Getting Repository at {:#?}", &local_repo);
             let repo = git.open_repository().expect("Unable to open repository");
@@ -310,7 +280,7 @@ fn main() {
             let open_ai_first_completion = open_ai_choices
                 .first()
                 .expect("OpenAI didn't send back any choices");
-            let mut open_ai_completion_text = open_ai_first_completion
+            let open_ai_completion_text = open_ai_first_completion
                 .text
                 .as_ref()
                 .expect("OpenAI didn't send back any message");
@@ -347,6 +317,8 @@ fn main() {
         }
         Some(Commands::PR { from, to }) => {
             info!("Generating PR from {:#?} to {:#?}", from, to);
+            let g_hub = GitHub::new(github_token.as_str(), github_url.as_str());
+            println!("{:#?}", g_hub)
         }
         Some(Commands::Models {}) => {
             info!("Getting Available Models");

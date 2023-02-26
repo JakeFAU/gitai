@@ -1,8 +1,16 @@
-use git2::{
-    Commit, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
-    ObjectType, Oid, Repository, Signature,
+use std::{
+    collections::HashMap,
+    path::{PathBuf, MAIN_SEPARATOR},
 };
-use log::{debug, log_enabled, Level};
+
+use git2::{
+    Commit, Cred, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
+    ObjectType, Oid, PushOptions, RemoteCallbacks, Repository, Signature,
+};
+use log::{debug, info, log_enabled, Level};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Struct to hold information for your local Git
 #[derive(Debug, Copy, Clone)]
@@ -21,6 +29,10 @@ pub struct Git<'a> {
     pub user_name: Option<&'a str>,
     /// The git user email - will look in git config if None
     pub user_email: Option<&'a str>,
+    /// The path to the private key, will default to `$HOME/.ssh/id_rsa`
+    pub ssh_key_path: Option<&'a str>,
+    /// The ssh user name, i have never seen where it wasn't git
+    pub ssh_user_name: Option<&'a str>,
 }
 
 /// Default implementation of the Git Opyions
@@ -34,32 +46,101 @@ impl Default for Git<'_> {
             key_id: None,
             user_name: None,
             user_email: None,
+            ssh_key_path: Some(&"~/.ssh/id_rsa"),
+            ssh_user_name: Some(&"git"),
         }
     }
 }
 
 /// GitGub Options
-#[derive(Debug)]
-pub struct GitHubOptions<'a> {
+#[derive(Debug, Default)]
+pub struct GitHub {
     /// The GitHub API Token
-    github_token: &'a str,
+    github_token: String,
     /// The GitHub API URL
-    github_url: &'a str,
+    github_url: String,
+    /// the GitHub user name
+    github_username: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PullResponse {
+    url: String,
+    html_url: String,
+    diff_url: String,
+    patch_url: String,
+    issue_url: String,
+    commits_url: String,
+    review_comments_url: String,
+    review_comment_url: String,
+    statuses_url: String,
+    number: String,
+    state: String,
+    locked: String,
 }
 
 /// The implementation for `GitHubOptions`
-impl<'a> GitHubOptions<'a> {
-    /// Create a new GitHubOptions struct.  Notice nohing is optional
+impl GitHub {
+    /// Create a new GitHub struct.
     ///
     /// # Arguments
     ///
     /// * `github_token` - The Github Token
     /// * `github_url` - The Github API Url
-    pub fn new(github_token: &'a str, github_url: &'a str) -> Self {
-        GitHubOptions {
-            github_token,
-            github_url,
-        }
+    pub fn new(github_token: &str, github_url: &str) -> Self {
+        let user_name =
+            get_value_from_api(github_url, github_token, "login", "user").unwrap_or_default();
+        let g = GitHub {
+            github_token: github_token.to_string(),
+            github_url: github_url.to_string(),
+            github_username: user_name,
+        };
+        return g;
+    }
+
+    pub fn push(
+        self,
+        repo: &Repository,
+        to_branch: String,
+        from_branch: String,
+        message: String,
+    ) -> Result<PullResponse, Box<dyn std::error::Error>> {
+        debug!("Pushing commits from {} to {}", from_branch, to_branch);
+        let binding = PathBuf::from(repo.path());
+        let path_str = binding.to_str().expect("Unable to get repo name");
+        let parts = path_str.split(MAIN_SEPARATOR);
+        let url = format!(
+            "{}/repos/{}/{}/pulls",
+            self.github_url,
+            self.github_username,
+            parts.last().expect("Cannot get Repo Name")
+        );
+        debug!("Posting to {}", url);
+        let client = self.get_client();
+        // set the body
+        let mut map = HashMap::new();
+        map.insert("title", "AI Generated Pull Request");
+        map.insert("head", &from_branch);
+        map.insert("base", &to_branch);
+        map.insert("body", &message);
+        info!("Sending push request to {}", url);
+        let res = client.post(url).json(&map).send()?;
+        let data = res.json::<PullResponse>()?;
+        return Ok(data);
+    }
+    fn get_client(self) -> reqwest::blocking::Client {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/vnd.github+json".parse().unwrap());
+        headers.insert(
+            AUTHORIZATION,
+            format!("Bearer {}", self.github_token).parse().unwrap(),
+        );
+        headers.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
+        let client = reqwest::blocking::ClientBuilder::new()
+            .default_headers(headers)
+            .build()
+            .expect("Error Building Reqwest Client");
+        return client;
     }
 }
 
@@ -84,6 +165,8 @@ impl<'a> Git<'a> {
         key_id: Option<&'a str>,
         user_name: Option<&'a str>,
         user_email: Option<&'a str>,
+        ssh_key_path: Option<&'a str>,
+        ssh_user_name: Option<&'a str>,
     ) -> Self {
         let g = Git {
             path,
@@ -93,6 +176,8 @@ impl<'a> Git<'a> {
             key_id,
             user_name,
             user_email,
+            ssh_key_path,
+            ssh_user_name,
         };
         return g;
     }
@@ -171,9 +256,9 @@ impl<'a> Git<'a> {
     pub fn diff_to_string(&self, diff: &Diff) -> Result<String, git2::Error> {
         debug!("Turning diff to a string");
         let mut diff_content = String::new();
-        let p = diff.print(
+        diff.print(
             DiffFormat::Patch,
-            |delta: DiffDelta, hunk: Option<DiffHunk>, line: DiffLine| {
+            |_delta: DiffDelta, _hunk: Option<DiffHunk>, line: DiffLine| {
                 let line_num = match line.old_lineno() {
                     Some(num) => num,
                     None => 0,
@@ -255,4 +340,73 @@ impl<'a> Git<'a> {
         }
         return Ok(commit_id);
     }
+    /// Push the branch to remote
+    ///
+    /// # Arguments
+    ///
+    /// * `repo` - The repository
+    /// * `branch_name` - The branch name, should be the current one
+    pub fn push_to_remote(&self, repo: &Repository, branch_name: &str) -> Result<(), git2::Error> {
+        debug!("Pushing branch to origin for PR");
+        let mut remote = repo.find_remote("origin")?;
+        debug!("Found origin, creating ssh callback");
+        let mut callbacks = RemoteCallbacks::new();
+        callbacks.credentials(|_, username_from_url, _| {
+            Cred::ssh_key_from_agent(username_from_url.unwrap())
+        });
+        debug!("Callback created, time to push");
+        let mut push_opts = PushOptions::new();
+        push_opts.remote_callbacks(callbacks);
+        debug!("Getting Branch to Push");
+        let branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .unwrap();
+        let refname = format!(
+            "refs/heads/{}",
+            branch
+                .name()
+                .unwrap()
+                .expect("Unable to unwrape the branch name")
+                .trim_start_matches("refs/heads/")
+        );
+        return remote.push(&[&refname], Some(&mut push_opts));
+    }
+}
+
+// Helper functions
+fn get_value_from_api(
+    base_url: &str,
+    token: &str,
+    key: &str,
+    url_tail: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let client = reqwest::blocking::Client::new();
+    let url = format!("{}/{}", base_url, url_tail);
+    let mut headers: HeaderMap = HeaderMap::new();
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token)).expect("Unable to set Auth Header"),
+    );
+    headers.insert(
+        "X-GitHub-Api-Version",
+        HeaderValue::from_static("2022-11-28"),
+    );
+
+    let response = client
+        .get(&url)
+        .headers(headers)
+        .send()?
+        .json::<serde_json::Value>()?;
+
+    if let Some(value) = response.get(key) {
+        if let Some(value_str) = value.as_str() {
+            return Ok(value_str.to_string());
+        }
+    }
+
+    Err("Unable to extract value from API response".into())
 }
