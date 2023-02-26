@@ -3,18 +3,25 @@ use log::{debug, log_enabled, Level};
 use serde_derive::Deserialize;
 use std::{path::PathBuf, str::FromStr};
 
+/// The main struct for settingsm just holds ai_settings and git_settings
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct Settings {
+    /// AI Settings
     pub ai_settings: AiSettings,
+    /// Git Settings
     pub git_settings: GitSettings,
 }
 
+/// AI Settings
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct AiSettings {
+    /// Tha OpenAI API Key
     pub api_key: String,
+    /// The OpenAI API Url
     pub api_url: String,
+    /// Options for OpenAI
     pub ai_options: AiOptions,
 }
 
@@ -126,31 +133,55 @@ impl Default for AiPrompt {
     }
 }
 
+/// Git Settings
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct GitSettings {
+    /// Github API Key - Only needed for PR
     pub github_api_key: String,
+    /// GitHub API url = Only needed for PR
     pub github_api_url: String,
+    /// Varioud Git Optionss
     pub git_options: GitOptions,
 }
 
+/// Options for Git/GitHub
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct GitOptions {
+    /// The local path to the repo, this really should always be .
     pub local_path: PathBuf,
+    /// Run `git add .` before committing - Defualts to false
     pub auto_add: bool,
+    /// Rung `git push origin <branch name>` before creating PR - Defaults to true
     pub auto_push: bool,
+    /// PGP sign your commits - Defaults to false
     pub sign_commits: bool,
+    /// PGP Key ID - Not needed unless `sign_commits = true`
     pub key_id: String,
+    /// Git User Name - For commits
     pub git_user_name: String,
+    /// Git User Email - For commits
     pub git_user_email: String,
+    /// The path to the ssh key for the repo (defaults to ~/.ssh/id_rsa)
     pub ssh_key_path: String,
+    /// The ssh user name for the repo, I've never seen this be anything but git
     pub ssh_user_name: String,
 }
 
 impl Default for GitOptions {
     fn default() -> Self {
-        GitOptions { local_path: PathBuf::from_str("."), auto_add: false, auto_push: true, sign_commits: false, key_id: String::new(), git_user_name: String::new(), git_user_email: String::new(), ssh_key_path: String::new(), ssh_user_name: () }
+        GitOptions { 
+            local_path: PathBuf::from_str(".").expect("Unable to create PathBuf"), 
+            auto_add: false, 
+            auto_push: true, 
+            sign_commits: false, 
+            key_id: String::new(), 
+            git_user_name: String::new(), 
+            git_user_email: String::new(), 
+            ssh_key_path: String::new(), 
+            ssh_user_name: String::new() 
+        }
     }
 }
 

@@ -114,7 +114,7 @@ fn _allowed_num_tries(s: &str) -> Result<u8, String> {
 }
 
 fn restore_terminal() -> io::Result<()> {
-    let mut old_termios = Termios::from_fd(0)?;
+    let old_termios = Termios::from_fd(0)?;
     tcsetattr(0, TCSAFLUSH, &old_termios)?;
     Ok(())
 }

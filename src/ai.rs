@@ -244,7 +244,7 @@ impl OpenAiClient {
         open_ai_request_params: Option<OpenAiRequestParams>,
     ) -> Result<OpenAiCompletionResponse, Box<dyn std::error::Error>> {
         info!("Getting Completion");
-        let url = format!("{}completions", self.base_url);
+        let url = format!("{}/completions", self.base_url);
         debug!("url={:#?}", url);
         let mut request_params = open_ai_request_params.unwrap_or_default();
         request_params.prompt = format!("{}", prompt);

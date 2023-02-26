@@ -1,9 +1,16 @@
+use std::{
+    collections::HashMap,
+    path::{PathBuf, MAIN_SEPARATOR},
+};
+
 use git2::{
     Commit, Cred, Diff, DiffDelta, DiffFormat, DiffHunk, DiffLine, DiffOptions, IndexAddOption,
     ObjectType, Oid, PushOptions, RemoteCallbacks, Repository, Signature,
 };
-use log::{debug, log_enabled, Level};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
+use log::{debug, info, log_enabled, Level};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Struct to hold information for your local Git
 #[derive(Debug, Copy, Clone)]
@@ -56,6 +63,22 @@ pub struct GitHub {
     github_username: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PullResponse {
+    url: String,
+    html_url: String,
+    diff_url: String,
+    patch_url: String,
+    issue_url: String,
+    commits_url: String,
+    review_comments_url: String,
+    review_comment_url: String,
+    statuses_url: String,
+    number: String,
+    state: String,
+    locked: String,
+}
+
 /// The implementation for `GitHubOptions`
 impl GitHub {
     /// Create a new GitHub struct.
@@ -73,6 +96,51 @@ impl GitHub {
             github_username: user_name,
         };
         return g;
+    }
+
+    pub fn push(
+        self,
+        repo: &Repository,
+        to_branch: String,
+        from_branch: String,
+        message: String,
+    ) -> Result<PullResponse, Box<dyn std::error::Error>> {
+        debug!("Pushing commits from {} to {}", from_branch, to_branch);
+        let binding = PathBuf::from(repo.path());
+        let path_str = binding.to_str().expect("Unable to get repo name");
+        let parts = path_str.split(MAIN_SEPARATOR);
+        let url = format!(
+            "{}/repos/{}/{}/pulls",
+            self.github_url,
+            self.github_username,
+            parts.last().expect("Cannot get Repo Name")
+        );
+        debug!("Posting to {}", url);
+        let client = self.get_client();
+        // set the body
+        let mut map = HashMap::new();
+        map.insert("title", "AI Generated Pull Request");
+        map.insert("head", &from_branch);
+        map.insert("base", &to_branch);
+        map.insert("body", &message);
+        info!("Sending push request to {}", url);
+        let res = client.post(url).json(&map).send()?;
+        let data = res.json::<PullResponse>()?;
+        return Ok(data);
+    }
+    fn get_client(self) -> reqwest::blocking::Client {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/vnd.github+json".parse().unwrap());
+        headers.insert(
+            AUTHORIZATION,
+            format!("Bearer {}", self.github_token).parse().unwrap(),
+        );
+        headers.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
+        let client = reqwest::blocking::ClientBuilder::new()
+            .default_headers(headers)
+            .build()
+            .expect("Error Building Reqwest Client");
+        return client;
     }
 }
 
@@ -188,9 +256,9 @@ impl<'a> Git<'a> {
     pub fn diff_to_string(&self, diff: &Diff) -> Result<String, git2::Error> {
         debug!("Turning diff to a string");
         let mut diff_content = String::new();
-        let p = diff.print(
+        diff.print(
             DiffFormat::Patch,
-            |delta: DiffDelta, hunk: Option<DiffHunk>, line: DiffLine| {
+            |_delta: DiffDelta, _hunk: Option<DiffHunk>, line: DiffLine| {
                 let line_num = match line.old_lineno() {
                     Some(num) => num,
                     None => 0,
