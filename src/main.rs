@@ -329,22 +329,3 @@ fn main() {
         None => (),
     }
 }
-
-const DEFAULT_FILE: &str = "
-{
-    \"ai_information\": {
-      \"api_url\": \"<OPEN_API_URL>\",
-      \"api_token\": \"<OPEN_AI_TOKEN>\",
-      \"options\": {
-        \"stochastic\": true
-      }
-    },
-    \"git_information\": {
-       \"remote_url\": \"<GITHUB_URL\",
-      \"remote_token\": \"<GITHUB_TOKEN>\",
-      \"options\": {
-        \"sign_commits\": true
-      }
-    }
-  }
-";
