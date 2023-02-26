@@ -1,103 +1,43 @@
-use std::{
-    cmp::min,
-    collections::HashMap,
-    fmt::{self, Display},
-    iter::repeat,
-    str::FromStr,
-};
+use std::{cmp::min, collections::HashMap, str::FromStr};
 
-use log::{debug, info};
+use log::{debug, error, info};
 use reqwest::header::{HeaderMap, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// This struct constructs the prompt to send to OpenAi
-/// The default implementation has good values for everything but
-/// `language`, `git_diff` and `postmessage` although the `postmessage`
-/// isn't really that important
-#[derive(Debug)]
-pub struct Prompt {
-    /// The preamble (everything before the language) for the prompt
-    pub preamble: Option<String>,
-    /// The language **Please note this defaults to `python` if you dont change it
-    pub language: Option<String>,
-    /// Anything after the language and before the diff
-    pub postamble: Option<String>,
-    /// char that acts as a separator for the git diff, defaults to '='
-    pub seperator: Option<char>,
-    /// the actual git diff to analyze, this defaults to a silly python script
-    pub git_diff: Option<String>,
-    /// anything after the git diff
-    pub postmessage: Option<String>,
-}
+use crate::settings::AiPrompt;
 
-/// Default implementation of the prompt
-impl Default for Prompt {
-    fn default() -> Self {
-        Prompt {
-            preamble: Some("Imagine you are an expert ".to_string()),
-            language: Some("Python  ".to_string()),
-            postamble: Some("developer and were given a git diff file to look at:".to_string()),
-            git_diff: Some(DEFAULT_CODE.to_string()),
-            seperator: Some('-'),
-            postmessage: Some(
-                "Please generate a good explanation of what the developer did. Stop when you think its clear enough to move on.".to_string(),
-            ),
-        }
-    }
-}
-
-/// Display information for the prompt
-impl Display for Prompt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} {} {}\n{}\n{}\n{}\n{}",
-            self.preamble.as_ref().unwrap_or(&"".to_string()),
-            self.language.as_ref().unwrap_or(&"".to_string()),
-            self.postamble.as_ref().unwrap_or(&"".to_string()),
-            repeat(self.seperator.unwrap_or('-'))
-                .take(16)
-                .collect::<String>(),
-            self.git_diff.as_ref().unwrap_or(&"".to_string()),
-            repeat(self.seperator.unwrap_or('-'))
-                .take(16)
-                .collect::<String>(),
-            self.postmessage.as_ref().unwrap_or(&"".to_string()),
-        )
-    }
-}
 // The request params to send to OpenAi for or completion
 #[derive(Serialize, Deserialize, Debug)]
 pub struct OpenAiRequestParams {
     /// The Open AI Model to use
-    model: String,
+    pub model: String,
     /// The prompt to send to Open AI
-    prompt: String,
+    pub prompt: String,
     /// Anything after the prompt that should be sent to Open AI
-    suffix: Option<String>,
+    pub suffix: Option<String>,
     /// Max Tokens - Note: this is how long the output can be, and will effect your bill
-    max_tokens: Option<u16>,
+    pub max_tokens: Option<u16>,
     /// Temperature to pass to the model - Note: For code they reccomend a value near 0
-    temperature: Option<f32>,
+    pub temperature: Option<f32>,
     /// nucleus sampling - Note: They reccomend only setting one of this or temperature, not both
-    top_p: Option<f32>,
+    pub top_p: Option<f32>,
     /// number of completions to send back - TODO: Implement this as an aysnc for now it does nothing
-    n: Option<u8>,
+    pub n: Option<u8>,
     /// The number of logprobs to return, defaults to 0
-    logprobs: Option<u8>,
+    pub logprobs: Option<u8>,
     /// Return the prompt
-    echo: Option<bool>,
+    pub echo: Option<bool>,
     /// a string that will stop the tokenizer at OpenAI from tokenizing
-    stop: Option<String>,
+    pub stop: Option<String>,
     /// Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far
-    presence_penalty: Option<f32>,
+    pub presence_penalty: Option<f32>,
     /// Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far
-    frequency_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
     /// Generates best_of completions server-side and returns the "best" (the one with the highest log probability per token).
     /// When used with n, best_of controls the number of candidate completions and n specifies how many to return –
     /// best_of must be greater than n.
-    best_of: Option<u8>,
+    pub best_of: Option<u8>,
 }
 /// An OpenAiChoice is basically the answer.  If n>1 his can be a Vector
 #[derive(Serialize, Deserialize, Debug)]
@@ -240,34 +180,29 @@ impl OpenAiClient {
     ///
     pub fn get_completions(
         &self,
-        prompt: Prompt,
-        open_ai_request_params: Option<OpenAiRequestParams>,
+        prompt: AiPrompt,
+        open_ai_request_params: OpenAiRequestParams,
     ) -> Result<OpenAiCompletionResponse, Box<dyn std::error::Error>> {
         info!("Getting Completion");
-        let url = format!("{}/completions", self.base_url);
+        let url = format!("{}completions", self.base_url);
         debug!("url={:#?}", url);
-        let mut request_params = open_ai_request_params.unwrap_or_default();
+        let mut request_params = open_ai_request_params;
         request_params.prompt = format!("{}", prompt);
+        debug!("Prompt=\n{}", &request_params.prompt);
         request_params.max_tokens = Some(min(
-            <usize as TryInto<u16>>::try_into(request_params.prompt.chars().count()).unwrap() / 10,
-            256,
+            <usize as TryInto<u16>>::try_into(request_params.prompt.chars().count()).unwrap() / 4,
+            4096,
         ));
         debug!("Max Tokens Set To {}", &request_params.max_tokens.unwrap());
         let res = self.client.post(url).json(&request_params).send()?;
+        match res.error_for_status_ref() {
+            Ok(_res) => (),
+            Err(err) => {
+                error!("Error Posting to OpenAI\n{}", err);
+                panic!("{}", err);
+            }
+        }
         let data = res.json::<OpenAiCompletionResponse>()?;
         return Ok(data);
     }
 }
-
-const DEFAULT_CODE: &str = "
-diff --git a/foo.py b/foo.py\n
-new file mode 100644\n
-index 0000000..e5a8e79\n
---- /dev/null\n
-+++ b/foo.py\n
-@@ -0,0 +1,5 @@\n
-+def say_hi(name: str) -> str:\n
-+    print(f'Hi {name}')\n
-+\n
-+if __name__ == 'main':\n
-";
