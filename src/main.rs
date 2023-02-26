@@ -1,14 +1,16 @@
+use ai::OpenAiRequestParams;
 use clap::{Parser, Subcommand};
-use log::{debug, info, log_enabled, Level};
+use log::{debug, error, info};
+use rand::seq::SliceRandom;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
 use termion::input::TermRead;
 use termios::{tcsetattr, Termios, TCSAFLUSH};
 
-use crate::ai::{OpenAiClient, Prompt};
+use crate::ai::OpenAiClient;
 use crate::git::{Git, GitHub};
-use crate::settings::Settings;
+use crate::settings::{AiPrompt, Settings};
 
 pub mod ai;
 pub mod git;
@@ -110,7 +112,7 @@ enum Commands {
 }
 
 fn _allowed_num_tries(s: &str) -> Result<u8, String> {
-    clap_num::number_range(s, 1, 3)
+    clap_num::number_range(s, 1, 5)
 }
 
 fn restore_terminal() -> io::Result<()> {
@@ -149,6 +151,11 @@ fn remove_blank_lines(input: &String) -> String {
         .filter(|line| !line.trim().is_empty())
         .collect::<Vec<&str>>()
         .join("\n")
+}
+
+fn error_message(message: &str) -> String {
+    error!("{}", message);
+    return message.to_string();
 }
 
 fn main() {
@@ -262,57 +269,61 @@ fn main() {
                 .diff_to_string(&diff)
                 .expect("Unable to parse generated git diff");
 
-            debug!("Got Diff, Its OpenA Time");
+            debug!("Got Diff, Its OpenAI Time");
             let client = OpenAiClient::new(ai_url, ai_token);
 
             debug!("We have a client, lets build the prompt");
-            let mut prompt = Prompt::default();
-            prompt.language = Some(language);
-            prompt.git_diff = Some(git_diff_text);
-            if log_enabled!(Level::Debug) {
-                debug!("{}", prompt.git_diff.as_ref().unwrap());
-            }
-            let res = client
-                .get_completions(prompt, None)
-                .expect("Unable to get completions");
-
-            let open_ai_choices = &res.choices.expect("OpenAI didn't send back any choices");
-            let open_ai_first_completion = open_ai_choices
-                .first()
-                .expect("OpenAI didn't send back any choices");
-            let open_ai_completion_text = open_ai_first_completion
-                .text
-                .as_ref()
-                .expect("OpenAI didn't send back any message");
-
-            let text = &remove_blank_lines(&open_ai_completion_text);
-
-            println!("Here is your AI Generated Commit Message\n\n{}\n\n", text);
-
-            let answer = prompt_yes_no("Would you like to use it?").expect("Error getting input");
-            restore_terminal().expect("Unable to switch the terminal back to stout");
-            debug!("Are we going to use this message? {}", answer);
-
-            if answer {
-                let oid = git.make_commit(&repo, &text).expect("Commit Failed");
-                if log_enabled!(Level::Debug) {
-                    debug!("Commit worked, returned {}", oid.to_string());
-                    let new_commit = repo
-                        .find_commit(oid)
-                        .expect("Cammpt find new commit, thats odd.");
-                    debug!("{}", git.display_commit(&new_commit))
+            let mut completions: Vec<String> = Vec::new();
+            if stochastic {
+                info!("Stochastic Mode Set");
+                let prompts = Settings::get_commit_prompt_choices();
+                for i in 0..num_tries {
+                    let mut prompt: AiPrompt =
+                        prompts.choose(&mut rand::thread_rng()).unwrap().to_owned();
+                    prompt.language = language.to_string();
+                    prompt.git_diff = git_diff_text.to_string();
+                    let params = OpenAiRequestParams {
+                        prompt: format!("{}", prompt),
+                        ..Default::default()
+                    };
+                    debug!("Post #{} to OpenAI", (i + 1));
+                    let res = &client
+                        .get_completions(prompt.to_owned(), params)
+                        .expect("Cannot connect to API");
+                    let open_ai_choices = res.choices.as_ref().unwrap();
+                    let open_ai_first_completion = open_ai_choices.first().unwrap();
+                    let open_ai_completion_text = open_ai_first_completion.text.as_ref().unwrap();
+                    let text = remove_blank_lines(&open_ai_completion_text);
+                    completions.push(text);
                 }
-
-                info!("Commit Successful, OID={}", oid.to_string());
             } else {
-                info!("Sorry, feel free to try again. OpenAi is not idenpotent");
-                info!(
-                    "You wasted {} tokens",
-                    res.usage
-                        .unwrap()
-                        .total_tokens
-                        .expect("OpenAI Didn't event send back how many tokens you used.")
-                );
+                info!("Non-Stochastic Mode Set");
+                let mut prompt = AiPrompt::default();
+                prompt.language = language;
+                prompt.git_diff = git_diff_text;
+                let params = OpenAiRequestParams {
+                    prompt: format!("{}", prompt),
+                    n: Some(num_tries),
+                    ..Default::default()
+                };
+                debug!("Posting to OpenAI");
+                let res = client
+                    .get_completions(prompt, params)
+                    .expect("Cannot connect to API");
+                let open_ai_choices = res.choices.unwrap();
+                for choice in open_ai_choices {
+                    let text = remove_blank_lines(
+                        &choice
+                            .text
+                            .expect("OpenAI Responded but with no completions"),
+                    );
+                    completions.push(text);
+                }
+            }
+
+            println!("Here is your AI Generated Commit Message\n\n");
+            for comp in completions.iter() {
+                println!("{}", comp)
             }
         }
         Some(Commands::PR { from, to }) => {
@@ -329,22 +340,3 @@ fn main() {
         None => (),
     }
 }
-
-const DEFAULT_FILE: &str = "
-{
-    \"ai_information\": {
-      \"api_url\": \"<OPEN_API_URL>\",
-      \"api_token\": \"<OPEN_AI_TOKEN>\",
-      \"options\": {
-        \"stochastic\": true
-      }
-    },
-    \"git_information\": {
-       \"remote_url\": \"<GITHUB_URL\",
-      \"remote_token\": \"<GITHUB_TOKEN>\",
-      \"options\": {
-        \"sign_commits\": true
-      }
-    }
-  }
-";

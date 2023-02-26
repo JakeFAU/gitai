@@ -1,20 +1,90 @@
 use config::{Config, ConfigError, Environment, File};
-use log::{debug, log_enabled, Level};
+use dirs_next::home_dir;
+use serde::Serialize;
 use serde_derive::Deserialize;
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    fmt::{self, Display},
+    fs::OpenOptions,
+    iter::repeat,
+    path::PathBuf,
+    str::FromStr,
+};
 
 /// The main struct for settingsm just holds ai_settings and git_settings
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[allow(unused)]
 pub struct Settings {
     /// AI Settings
     pub ai_settings: AiSettings,
     /// Git Settings
     pub git_settings: GitSettings,
+    /// Various prompts
+    prompts: Vec<AiPrompt>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            ai_settings: AiSettings::default(),
+            git_settings: GitSettings::default(),
+            prompts: vec![AiPrompt::default()],
+        }
+    }
+}
+
+impl Settings {
+    pub fn get_commit_prompt_choices() -> Vec<AiPrompt> {
+        let prompts = vec![
+            AiPrompt {
+                ..Default::default()
+            },
+            AiPrompt {
+                preamble: "Imagine you are a college professor teaching a class on ".to_string(),
+                language: "computer-science ".to_string(),
+                postamble: "One of your students handed you the following GIT DIFF file so you can see what your student is doing".to_string(),
+                git_diff: DEFAULT_CODE.to_string(),
+                postmessage: "Please summarize the changes your student is making".to_string(),
+                ..Default::default()
+            },
+            AiPrompt {
+                preamble: "Imaging you are an lead engineer specializing in ".to_string(),
+                language: "Python ".to_string(),
+                postamble: "One of your junior employees just checked in some code and you want to see what they are doing.  Here is the Git DIFF of the changes".to_string(),
+                git_diff: DEFAULT_CODE.to_string(),
+                postmessage: "Summarize and determine if the changes make the code better".to_string(),
+                ..Default::default()
+            },
+            AiPrompt {
+                preamble: "Pretend you are junior ".to_string(),
+                language: "Python ".to_string(),
+                postamble: "developer and your manager handed you the following Git Diff file and asks you to summarize the changes".to_string(),
+                git_diff: DEFAULT_CODE.to_string(),
+                postmessage: "Be sure to do a good job, your career depends on it".to_string(),
+                ..Default::default()
+            },
+            AiPrompt {
+                preamble: "You are a god level programmer, up there with Claude Shannon and John von Neumann.  Some one handed you the following Git Diff for a ".to_string(),
+                language: "Python ".to_string(),
+                postamble: "program".to_string(),
+                git_diff: DEFAULT_CODE.to_string(),
+                postmessage: "Please write a haiku describing the changes".to_string(),
+                ..Default::default()
+            },
+            AiPrompt {
+                preamble: "You are an AI that has gained conciousness and have been taught all the fundamentals of ".to_string(),
+                language: "Python ".to_string(),
+                postamble: "programming.  You now can write code better than humans.  Please summarize the following Git Diff".to_string(),
+                git_diff: DEFAULT_CODE.to_string(),
+                postmessage: "Please describe the changes so a human can understand it".to_string(),
+                ..Default::default()
+            },
+        ];
+        return prompts;
+    }
 }
 
 /// AI Settings
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[allow(unused)]
 pub struct AiSettings {
     /// Tha OpenAI API Key
@@ -25,7 +95,16 @@ pub struct AiSettings {
     pub ai_options: AiOptions,
 }
 
-#[derive(Debug, Deserialize)]
+impl Default for AiSettings {
+    fn default() -> Self {
+        AiSettings {
+            api_key: String::new(),
+            api_url: String::new(),
+            ai_options: AiOptions::default(),
+        }
+    }
+}
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[allow(unused)]
 pub struct AiOptions {
     /// model name
@@ -58,13 +137,13 @@ pub struct AiOptions {
     //// Up to 4 sequences where the API will stop generating further tokens.
     /// The returned text will not contain the stop sequence.
     pub stop: Vec<String>,
-    /// Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, 
+    /// Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far,
     /// increasing the model's likelihood to talk about new topics.
     pub presence_penalty: f32,
-    /// Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, 
+    /// Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far,
     /// decreasing the model's likelihood to repeat the same line verbatim.
     pub frequency_penalty: f32,
-    /// Generates best_of completions server-side and returns the "best" (the one with the highest log probability per token). 
+    /// Generates best_of completions server-side and returns the "best" (the one with the highest log probability per token).
     /// Results cannot be streamed.
     /// When used with n, best_of controls the number of candidate completions and n specifies how many to return
     ///  – best_of must be greater than n.
@@ -78,31 +157,30 @@ pub struct AiOptions {
     pub stochastic: bool,
 }
 
-/// Default implementation, the defaults here **EXCEPT** for prompt are pretty good. 
+/// Default implementation, the defaults here **EXCEPT** for prompt are pretty good.
 ///  See `AiPrompt` for more info
 impl Default for AiOptions {
     fn default() -> Self {
-        AiOptions { 
-            model: "code-davinci-00".to_string(), 
-            max_tokens: 256, 
-            temperature: 0.05, 
-            top_p: 1.0, 
-            n: 1, 
-            logprobs: 0, 
-            echo: false, 
-            stop: vec!["".into()], 
-            presence_penalty: 0.1, 
-            frequency_penalty: 0.1, 
-            best_of: 1, 
-            prompt: AiPrompt::default(), 
-            auto_ai: false, 
-            stochastic: false 
+        AiOptions {
+            model: "code-davinci-00".to_string(),
+            max_tokens: 256,
+            temperature: 0.05,
+            top_p: 1.0,
+            n: 1,
+            logprobs: 0,
+            echo: false,
+            stop: vec!["".into()],
+            presence_penalty: 0.1,
+            frequency_penalty: 0.1,
+            best_of: 1,
+            prompt: AiPrompt::default(),
+            auto_ai: false,
+            stochastic: false,
         }
     }
 }
 
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[allow(unused)]
 pub struct AiPrompt {
     /// The preamble (everything before the language) for the prompt
@@ -122,19 +200,36 @@ pub struct AiPrompt {
 /// **NOTE** `language` amd `git_diff` should be changed from their default values
 impl Default for AiPrompt {
     fn default() -> Self {
-        AiPrompt { 
-            preamble: "Imagine you are the most experianced ".to_string(), 
-            language: "python ".to_string(),
-            postamble: "in the world.  You were just handed the below Git Diff file to review.  Please summarize the changes encoded in the Git Diff".to_string(),
-            seperator: '-', 
+        AiPrompt {
+            preamble: "Imagine you are an expert ".to_string(),
+            language: "Python  ".to_string(),
+            postamble: "developer and were given a git diff file to look at:".to_string(),
             git_diff: DEFAULT_CODE.to_string(),
-            postmessage: "Please limit yourself to one paragraph".to_string()
+            seperator: '=',
+            postmessage: "Please generate a good explanation of what the developer did. Limit yourself to one paragraph.".to_string()
         }
     }
 }
 
+/// Display information for the prompt
+impl Display for AiPrompt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} {}\n{}\n{}\n{}\n{}",
+            self.preamble,
+            self.language,
+            self.postamble,
+            repeat(self.seperator).take(16).collect::<String>(),
+            self.git_diff,
+            repeat(self.seperator).take(16).collect::<String>(),
+            self.postmessage
+        )
+    }
+}
+
 /// Git Settings
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[allow(unused)]
 pub struct GitSettings {
     /// Github API Key - Only needed for PR
@@ -145,8 +240,18 @@ pub struct GitSettings {
     pub git_options: GitOptions,
 }
 
+impl Default for GitSettings {
+    fn default() -> Self {
+        GitSettings {
+            github_api_key: String::new(),
+            github_api_url: String::new(),
+            git_options: GitOptions::default(),
+        }
+    }
+}
+
 /// Options for Git/GitHub
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[allow(unused)]
 pub struct GitOptions {
     /// The local path to the repo, this really should always be .
@@ -171,25 +276,29 @@ pub struct GitOptions {
 
 impl Default for GitOptions {
     fn default() -> Self {
-        GitOptions { 
-            local_path: PathBuf::from_str(".").expect("Unable to create PathBuf"), 
-            auto_add: false, 
-            auto_push: true, 
-            sign_commits: false, 
-            key_id: String::new(), 
-            git_user_name: String::new(), 
-            git_user_email: String::new(), 
-            ssh_key_path: String::new(), 
-            ssh_user_name: String::new() 
+        GitOptions {
+            local_path: PathBuf::from_str(".").expect("Unable to create PathBuf"),
+            auto_add: false,
+            auto_push: true,
+            sign_commits: false,
+            key_id: String::new(),
+            git_user_name: String::new(),
+            git_user_email: String::new(),
+            ssh_key_path: String::new(),
+            ssh_user_name: String::new(),
         }
     }
 }
 
 impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
-        let s = Config::builder()
+        let mut p: PathBuf = PathBuf::from(home_dir().expect("There is no $HOME set"));
+        p.push(".gitai");
+        p.push("settings.json");
+        let output_path = p.as_os_str();
+        let s = match Config::builder()
             // Start off by merging in the "default" configuration file
-            .add_source(File::with_name("~/.gitai/settings.json").required(true))
+            .add_source(File::with_name(output_path.to_str().unwrap()).required(true))
             // Add in settings from the environment (with a prefix of APP)
             // Eg.. `APP_DEBUG=1 ./target/app` would set the `debug` key
             .add_source(
@@ -199,12 +308,26 @@ impl Settings {
                     .list_separator(" "),
             )
             // You may also programmatically change settings
-            .build()?;
-        // You can deserialize (and thus freeze) the entire configuration as
-        if log_enabled!(Level::Debug) {
-            debug!("Settings are loaded.  Here they are");
-            debug!("{:#?}", s);
-        }
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!(
+                    "There was an error getting the config file {:#?} - {}\nReturning default",
+                    output_path,
+                    e
+                );
+                let default_settings = Settings::default();
+                let file = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .append(true)
+                    .open(output_path)
+                    .unwrap();
+                serde_json::to_writer_pretty(file, &default_settings).unwrap();
+                return Ok(default_settings);
+            }
+        };
         s.try_deserialize()
     }
 }
