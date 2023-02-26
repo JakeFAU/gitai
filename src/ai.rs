@@ -180,14 +180,14 @@ impl OpenAiClient {
     ///
     pub fn get_completions(
         &self,
-        prompt: AiPrompt,
+        ai_prompt: AiPrompt,
         open_ai_request_params: OpenAiRequestParams,
     ) -> Result<OpenAiCompletionResponse, Box<dyn std::error::Error>> {
         info!("Getting Completion");
         let url = format!("{}completions", self.base_url);
         debug!("url={:#?}", url);
         let mut request_params = open_ai_request_params;
-        request_params.prompt = format!("{}", prompt);
+        request_params.prompt = format!("{}", ai_prompt);
         debug!("Prompt=\n{}", &request_params.prompt);
         request_params.max_tokens = Some(min(
             <usize as TryInto<u16>>::try_into(request_params.prompt.chars().count()).unwrap() / 4,
