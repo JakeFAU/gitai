@@ -1,16 +1,14 @@
-use ai::OpenAiRequestParams;
 use clap::{Parser, Subcommand};
 use log::{debug, error, info};
-use rand::seq::SliceRandom;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
 use termion::input::TermRead;
 use termios::{tcsetattr, Termios, TCSAFLUSH};
 
-use crate::ai::OpenAiClient;
+use crate::ai::OpenAIClient;
 use crate::git::{Git, GitHub};
-use crate::settings::{AiPrompt, Settings};
+use crate::settings::Settings;
 
 pub mod ai;
 pub mod git;
@@ -270,61 +268,7 @@ fn main() {
                 .expect("Unable to parse generated git diff");
 
             debug!("Got Diff, Its OpenAI Time");
-            let client = OpenAiClient::new(ai_url, ai_token);
-
-            debug!("We have a client, lets build the prompt");
-            let mut completions: Vec<String> = Vec::new();
-            if stochastic {
-                info!("Stochastic Mode Set");
-                let prompts = Settings::get_commit_prompt_choices();
-                for i in 0..num_tries {
-                    let mut prompt: AiPrompt =
-                        prompts.choose(&mut rand::thread_rng()).unwrap().to_owned();
-                    prompt.language = language.to_string();
-                    prompt.git_diff = git_diff_text.to_string();
-                    let params = OpenAiRequestParams {
-                        prompt: format!("{}", prompt),
-                        ..Default::default()
-                    };
-                    debug!("Post #{} to OpenAI", (i + 1));
-                    let res = &client
-                        .get_completions(prompt.to_owned(), params)
-                        .expect("Cannot connect to API");
-                    let open_ai_choices = res.choices.as_ref().unwrap();
-                    let open_ai_first_completion = open_ai_choices.first().unwrap();
-                    let open_ai_completion_text = open_ai_first_completion.text.as_ref().unwrap();
-                    let text = remove_blank_lines(&open_ai_completion_text);
-                    completions.push(text);
-                }
-            } else {
-                info!("Non-Stochastic Mode Set");
-                let mut prompt = AiPrompt::default();
-                prompt.language = language;
-                prompt.git_diff = git_diff_text;
-                let params = OpenAiRequestParams {
-                    prompt: format!("{}", prompt),
-                    n: Some(num_tries),
-                    ..Default::default()
-                };
-                debug!("Posting to OpenAI");
-                let res = client
-                    .get_completions(prompt, params)
-                    .expect("Cannot connect to API");
-                let open_ai_choices = res.choices.unwrap();
-                for choice in open_ai_choices {
-                    let text = remove_blank_lines(
-                        &choice
-                            .text
-                            .expect("OpenAI Responded but with no completions"),
-                    );
-                    completions.push(text);
-                }
-            }
-
-            println!("Here is your AI Generated Commit Message\n\n");
-            for comp in completions.iter() {
-                println!("{}", comp)
-            }
+            let client = OpenAIClient::new(&ai_token, None);
         }
         Some(Commands::PR { from, to }) => {
             info!("Generating PR from {:#?} to {:#?}", from, to);
@@ -333,9 +277,12 @@ fn main() {
         }
         Some(Commands::Models {}) => {
             info!("Getting Available Models");
-            let client = OpenAiClient::new(ai_url, ai_token);
-            let res = client.get_models().expect("Unable to get models");
-            print!("{:#?}", res)
+            let client = OpenAIClient::new(&ai_token, None);
+            let res = client.get_models();
+            match res {
+                Ok(map) => println!("Models -> {:#?}", map),
+                Err(e) => println!("Error -> {:#?}", e),
+            }
         }
         None => (),
     }

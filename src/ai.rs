@@ -1,14 +1,14 @@
-use std::{cmp::min, collections::HashMap, str::FromStr};
+use std::{collections::HashMap, str::FromStr};
 
-use log::{debug, error, info};
-use reqwest::header::{HeaderMap, AUTHORIZATION, CONTENT_TYPE};
+use futures::{stream::FuturesUnordered, StreamExt};
+use log::{debug, info};
+use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::settings::AiPrompt;
+use url::Url;
 
 // The request params to send to OpenAi for or completion
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OpenAiRequestParams {
     /// The Open AI Model to use
     pub model: String,
@@ -22,7 +22,7 @@ pub struct OpenAiRequestParams {
     pub temperature: Option<f32>,
     /// nucleus sampling - Note: They reccomend only setting one of this or temperature, not both
     pub top_p: Option<f32>,
-    /// number of completions to send back - TODO: Implement this as an aysnc for now it does nothing
+    /// number of completions to send back
     pub n: Option<u8>,
     /// The number of logprobs to return, defaults to 0
     pub logprobs: Option<u8>,
@@ -102,107 +102,88 @@ impl Default for OpenAiRequestParams {
     }
 }
 
-/// A simple little client for making requests to OpenAi
-#[derive(Debug)]
-pub struct OpenAiClient {
-    /// The reqwest client - TODO: Make this a non-blocking one
-    client: reqwest::blocking::Client,
-    /// The base url for the OpenApi API
-    base_url: String,
+#[derive(Debug, Clone)]
+/// A Client for commnicating with OpenAi
+pub struct OpenAIClient {
+    /// The base url for OpenAI's API
+    pub base_url: Url,
+    /// The api key used to make requestes to OpenAI
+    api_key: String,
+    ///A map of headers for easy reuse
+    headers: HeaderMap,
 }
 
-impl OpenAiClient {
-    /// Returns an OpenAiClient with the base url and api token
-    ///
-    /// # Arguments
-    ///
-    /// * `base_url` - A string containing the base url for the API
-    /// * `open_api_token` - The OpenAi token to use
-    ///
-    pub fn new(base_url: String, open_api_token: String) -> Self {
+impl OpenAIClient {
+    pub fn new(api_key: &str, base_url: Option<Url>) -> Self {
+        info!("Creating new OpenAI Client");
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
-        headers.insert(
-            AUTHORIZATION,
-            format!("Bearer {}", open_api_token).parse().unwrap(),
-        );
-        let client = reqwest::blocking::ClientBuilder::new()
-            .default_headers(headers)
-            .build()
-            .expect("Error Building Reqwest Client");
-        let ai_client = OpenAiClient {
-            client: client,
-            base_url: base_url,
+        headers.insert(ACCEPT, "application/json".parse().unwrap());
+        let url = match base_url {
+            Some(u) => u,
+            None => Url::parse("https://api.openai.com/v1/").unwrap(),
         };
-        return ai_client;
+        OpenAIClient {
+            base_url: url,
+            api_key: api_key.to_string(),
+            headers: headers,
+        }
     }
 
-    /// Gets all the models available at OpenAi - THis is mainly to test
-    /// if your token is valid
-    ///
-    /// Returns `Ok(HashMap<String, Value>)` on success, otherwise returns an error.
-    ///
-    /// # Errors
-    ///
-    /// This method fails whenever the response body is not in JSON format or it
-    /// cannot be properly deserialized to target type T.
-    /// For more details please see [serde_json::from_reader](https://docs.serde.rs/serde_json/fn.from_reader.html)
-    ///
-    /// This method fails if there was an error while sending request,
-    /// redirect loop was detected or redirect limit was exhausted.
-    ///
     pub fn get_models(&self) -> Result<HashMap<String, Value>, Box<dyn std::error::Error>> {
         info!("Getting Available Models");
-        let url = format!("{}models", self.base_url);
-        debug!("url={:#?}", url);
-        let res = self.client.get(url).send()?;
-        let jsn = res.json::<HashMap<String, Value>>()?;
-        return Ok(jsn);
+        debug!("This is mainly useful to make sure you can talk to the OpenAi API");
+        let url = self.base_url.join("models")?;
+        let client = reqwest::blocking::ClientBuilder::new()
+            .default_headers(self.headers.clone())
+            .build()?;
+        let response = client.get(url).bearer_auth(self.api_key.clone()).send()?;
+        let json = response.json::<HashMap<String, Value>>()?;
+        return Ok(json);
     }
 
-    /// Gets the completions from a given Git Diff file
-    ///
-    /// # Arguments
-    ///
-    /// * `git_diff_text` - A string containing the text of the Git Diff Message
-    /// * `open_ai_request_params` - Optional - will be set to sensible defaults and then the prompt changed to the git diff
-    ///
-    /// Returns `Ok(OpenAiCompletionResponse)` on success, otherwise returns an error.
-    ///
-    /// # Errors
-    ///
-    /// This method fails whenever the response body is not in JSON format or it
-    /// cannot be properly deserialized to target type T.
-    /// For more details please see [serde_json::from_reader](https://docs.serde.rs/serde_json/fn.from_reader.html).
-    ///
-    /// This method fails if there was an error while sending request,
-    /// redirect loop was detected or redirect limit was exhausted.
-    ///
-    pub fn get_completions(
+    fn get_single_completion(
         &self,
-        ai_prompt: AiPrompt,
-        open_ai_request_params: OpenAiRequestParams,
+        params: OpenAiRequestParams,
     ) -> Result<OpenAiCompletionResponse, Box<dyn std::error::Error>> {
-        info!("Getting Completion");
-        let url = format!("{}completions", self.base_url);
-        debug!("url={:#?}", url);
-        let mut request_params = open_ai_request_params;
-        request_params.prompt = format!("{}", ai_prompt);
-        debug!("Prompt=\n{}", &request_params.prompt);
-        request_params.max_tokens = Some(min(
-            <usize as TryInto<u16>>::try_into(request_params.prompt.chars().count()).unwrap() / 4,
-            4096,
-        ));
-        debug!("Max Tokens Set To {}", &request_params.max_tokens.unwrap());
-        let res = self.client.post(url).json(&request_params).send()?;
-        match res.error_for_status_ref() {
-            Ok(_res) => (),
-            Err(err) => {
-                error!("Error Posting to OpenAI\n{}", err);
-                panic!("{}", err);
-            }
+        info!("Sending single request to OpenAi");
+        let url = self.base_url.join("completions")?;
+        let client = reqwest::blocking::ClientBuilder::new()
+            .default_headers(self.headers.clone())
+            .build()?;
+        let response = client
+            .post(url)
+            .bearer_auth(self.api_key.clone())
+            .json(&params)
+            .send()?;
+        let ai = response.json::<OpenAiCompletionResponse>()?;
+        return Ok(ai);
+    }
+
+    async fn get_multiple_completions(
+        &self,
+        params: Vec<OpenAiRequestParams>,
+    ) -> Result<Vec<OpenAiCompletionResponse>, Box<dyn std::error::Error>> {
+        info!("Sending multiple requests to OpenAi");
+        let url = self.base_url.join("completions")?;
+        let client = reqwest::ClientBuilder::new()
+            .default_headers(self.headers.clone())
+            .build()?;
+        let mut futs: FuturesUnordered<_> = FuturesUnordered::new();
+        for param in params {
+            let response = client
+                .post(url.clone())
+                .bearer_auth(self.api_key.clone())
+                .json(&param)
+                .send()
+                .await?;
+            let fut = response.json::<OpenAiCompletionResponse>();
+            futs.push(fut);
         }
-        let data = res.json::<OpenAiCompletionResponse>()?;
-        return Ok(data);
+        let mut results = Vec::new();
+        while let Some(result) = futs.next().await {
+            results.push(result?);
+        }
+        Ok(results)
     }
 }
