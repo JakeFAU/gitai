@@ -34,52 +34,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn get_commit_prompt_choices() -> Vec<AiPrompt> {
-        let prompts = vec![
-            AiPrompt {
-                ..Default::default()
-            },
-            AiPrompt {
-                preamble: "Imagine you are a college professor teaching a class on ".to_string(),
-                language: "computer-science ".to_string(),
-                postamble: "One of your students handed you the following GIT DIFF file so you can see what your student is doing".to_string(),
-                git_diff: DEFAULT_CODE.to_string(),
-                postmessage: "Please summarize the changes your student is making".to_string(),
-                ..Default::default()
-            },
-            AiPrompt {
-                preamble: "Imaging you are an lead engineer specializing in ".to_string(),
-                language: "Python ".to_string(),
-                postamble: "One of your junior employees just checked in some code and you want to see what they are doing.  Here is the Git DIFF of the changes".to_string(),
-                git_diff: DEFAULT_CODE.to_string(),
-                postmessage: "Summarize and determine if the changes make the code better".to_string(),
-                ..Default::default()
-            },
-            AiPrompt {
-                preamble: "Pretend you are junior ".to_string(),
-                language: "Python ".to_string(),
-                postamble: "developer and your manager handed you the following Git Diff file and asks you to summarize the changes".to_string(),
-                git_diff: DEFAULT_CODE.to_string(),
-                postmessage: "Be sure to do a good job, your career depends on it".to_string(),
-                ..Default::default()
-            },
-            AiPrompt {
-                preamble: "You are a god level programmer, up there with Claude Shannon and John von Neumann.  Some one handed you the following Git Diff for a ".to_string(),
-                language: "Python ".to_string(),
-                postamble: "program".to_string(),
-                git_diff: DEFAULT_CODE.to_string(),
-                postmessage: "Please write a haiku describing the changes".to_string(),
-                ..Default::default()
-            },
-            AiPrompt {
-                preamble: "You are an AI that has gained conciousness and have been taught all the fundamentals of ".to_string(),
-                language: "Python ".to_string(),
-                postamble: "programming.  You now can write code better than humans.  Please summarize the following Git Diff".to_string(),
-                git_diff: DEFAULT_CODE.to_string(),
-                postmessage: "Please describe the changes so a human can understand it".to_string(),
-                ..Default::default()
-            },
-        ];
-        return prompts;
+        return get_prompts();
     }
 }
 
@@ -344,3 +299,52 @@ index 0000000..e5a8e79\n
 +\n
 +if __name__ == 'main':\n
 ";
+
+pub fn get_prompts() -> Vec<AiPrompt> {
+    let prompts = vec![
+        AiPrompt {
+            ..Default::default()
+        },
+        AiPrompt {
+            preamble: "Imagine you are a college professor teaching a class on ".to_string(),
+            language: "computer-science ".to_string(),
+            postamble: "One of your students handed you the following GIT DIFF file so you can see what your student is doing".to_string(),
+            git_diff: DEFAULT_CODE.to_string(),
+            postmessage: "Please summarize the changes your student is making".to_string(),
+            ..Default::default()
+        },
+        AiPrompt {
+            preamble: "Imaging you are an lead engineer specializing in ".to_string(),
+            language: "Python ".to_string(),
+            postamble: "One of your junior employees just checked in some code and you want to see what they are doing.  Here is the Git DIFF of the changes".to_string(),
+            git_diff: DEFAULT_CODE.to_string(),
+            postmessage: "Summarize and determine if the changes make the code better".to_string(),
+            ..Default::default()
+        },
+        AiPrompt {
+            preamble: "Pretend you are junior ".to_string(),
+            language: "Python ".to_string(),
+            postamble: "developer and your manager handed you the following Git Diff file and asks you to summarize the changes".to_string(),
+            git_diff: DEFAULT_CODE.to_string(),
+            postmessage: "Be sure to do a good job, your career depends on it".to_string(),
+            ..Default::default()
+        },
+        AiPrompt {
+            preamble: "You are a god level programmer, up there with Claude Shannon and John von Neumann.  Some one handed you the following Git Diff for a ".to_string(),
+            language: "Python ".to_string(),
+            postamble: "program".to_string(),
+            git_diff: DEFAULT_CODE.to_string(),
+            postmessage: "Please write a haiku describing the changes".to_string(),
+            ..Default::default()
+        },
+        AiPrompt {
+            preamble: "You are an AI that has gained conciousness and have been taught all the fundamentals of ".to_string(),
+            language: "Python ".to_string(),
+            postamble: "programming.  You now can write code better than humans.  Please summarize the following Git Diff".to_string(),
+            git_diff: DEFAULT_CODE.to_string(),
+            postmessage: "Please describe the changes so a human can understand it".to_string(),
+            ..Default::default()
+        },
+    ];
+    return prompts;
+}

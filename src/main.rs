@@ -1,14 +1,15 @@
 use clap::{Parser, Subcommand};
 use log::{debug, error, info};
+use rand::seq::index::sample;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
 use termion::input::TermRead;
 use termios::{tcsetattr, Termios, TCSAFLUSH};
 
-use crate::ai::OpenAIClient;
+use crate::ai::{OpenAIClient, OpenAiCompletionResponse, OpenAiRequestParams};
 use crate::git::{Git, GitHub};
-use crate::settings::Settings;
+use crate::settings::{AiPrompt, Settings};
 
 pub mod ai;
 pub mod git;
@@ -119,6 +120,11 @@ fn restore_terminal() -> io::Result<()> {
     Ok(())
 }
 
+fn select_random_prompts(prompts: &[AiPrompt], n: usize) -> Vec<AiPrompt> {
+    let indices = sample(&mut rand::thread_rng(), prompts.len(), n);
+    indices.iter().map(|i| &prompts[i]).cloned().collect()
+}
+
 /// Helper function to ask the user whether or not they really wanted to ____
 /// (as specified by the `prompt`). As long as the response starts with the
 /// letter `y` (case insensitive), the reply is treated as affirmative.
@@ -155,8 +161,8 @@ fn error_message(message: &str) -> String {
     error!("{}", message);
     return message.to_string();
 }
-
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
     info!("Initializing GitAI");
 
@@ -268,7 +274,24 @@ fn main() {
                 .expect("Unable to parse generated git diff");
 
             debug!("Got Diff, Its OpenAI Time");
-            let client = OpenAIClient::new(&ai_token, None);
+            let num_prompts = settings.ai_settings.ai_options.n as usize;
+            let prompts = settings::get_prompts();
+            let random_prompts = {
+                let mut cloned_prompts = prompts.clone();
+                select_random_prompts(&mut cloned_prompts, num_prompts);
+                cloned_prompts
+            };
+            let mut params: Vec<OpenAiRequestParams> = Vec::new();
+            for mut p in random_prompts {
+                p.language = language.to_string();
+                p.git_diff = git_diff_text.to_string();
+                let mut req = OpenAiRequestParams::default();
+                req.prompt = format!("{}", p);
+                req.n = Some(3);
+                params.push(req)
+            }
+            let ai = OpenAIClient::new(&ai_token, None);
+            let completions = ai.get_multiple_completions(params).await;
         }
         Some(Commands::PR { from, to }) => {
             info!("Generating PR from {:#?} to {:#?}", from, to);
@@ -285,5 +308,5 @@ fn main() {
             }
         }
         None => (),
-    }
+    };
 }

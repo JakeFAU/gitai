@@ -1,10 +1,10 @@
-use std::{collections::HashMap, str::FromStr};
-
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::future::join_all;
 use log::{debug, info};
 use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::{collections::HashMap, str::FromStr};
+use tokio::task::JoinSet;
 use url::Url;
 
 // The request params to send to OpenAi for or completion
@@ -142,7 +142,7 @@ impl OpenAIClient {
         return Ok(json);
     }
 
-    fn get_single_completion(
+    pub fn get_single_completion(
         &self,
         params: OpenAiRequestParams,
     ) -> Result<OpenAiCompletionResponse, Box<dyn std::error::Error>> {
@@ -160,30 +160,35 @@ impl OpenAIClient {
         return Ok(ai);
     }
 
-    async fn get_multiple_completions(
-        &self,
-        params: Vec<OpenAiRequestParams>,
-    ) -> Result<Vec<OpenAiCompletionResponse>, Box<dyn std::error::Error>> {
+    pub async fn get_multiple_completions(&self, params: Vec<OpenAiRequestParams>) {
         info!("Sending multiple requests to OpenAi");
-        let url = self.base_url.join("completions")?;
+        let url = self
+            .base_url
+            .join("completions")
+            .expect("Error building URL");
         let client = reqwest::ClientBuilder::new()
             .default_headers(self.headers.clone())
-            .build()?;
-        let mut futs: FuturesUnordered<_> = FuturesUnordered::new();
-        for param in params {
-            let response = client
+            .build()
+            .expect("Unable to build client");
+        let mut fut_vec = Vec::new();
+        for (i, param) in params.into_iter().enumerate() {
+            debug!("Spawning thread #{}", i);
+            let client = &client;
+            let token = &self.api_key;
+            let f = client
                 .post(url.clone())
-                .bearer_auth(self.api_key.clone())
+                .bearer_auth(token)
                 .json(&param)
-                .send()
-                .await?;
-            let fut = response.json::<OpenAiCompletionResponse>();
-            futs.push(fut);
+                .send();
+            fut_vec.push(f)
         }
-        let mut results = Vec::new();
-        while let Some(result) = futs.next().await {
-            results.push(result?);
+        let completions = join_all(fut_vec).await;
+        println!("{:#?}", completions);
+        for c in completions {
+            match c {
+                Ok(comp) => println!("{:#?}", comp.json::<OpenAiCompletionResponse>().await),
+                Err(e) => eprintln!("{}", e),
+            }
         }
-        Ok(results)
     }
 }
